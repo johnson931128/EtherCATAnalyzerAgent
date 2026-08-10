@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, START, END
 class AgentState(TypedDict):
     task: str
     context: str
+    docs_index: str
     selected_source: str
     source_code: str
     capture_evidence: str
@@ -18,6 +19,7 @@ class AgentState(TypedDict):
 
 PROJECT_ROOT = Path(r"D:\EtherCATAnalyzer\EtherCATAnalyzer_net472")
 AGENTS_PATH = PROJECT_ROOT / "AGENTS.md"
+DOCS_READ_PATH = PROJECT_ROOT / "docs" / "read"
 CAPTURE_PATH = Path(r"D:\EtherCATAnalyzer\Data\Json\ethercat-datagrams.json")
 
 SOURCE_FILES = {
@@ -133,6 +135,26 @@ def query_capture(state: AgentState):
 
     return {"capture_evidence": capture_evidence}
 
+def load_docs_index(state: AgentState):
+    entries = []
+
+    for path in sorted(DOCS_READ_PATH.glob("*.md")):
+        headings = []
+
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+
+            if stripped.startswith("#"):
+                headings.append(stripped)
+
+        entry = path.name
+
+        if headings:
+            entry += "\n" + "\n".join(f"  {heading}" for heading in headings)
+
+        entries.append(entry)
+
+    return {"docs_index": "\n\n".join(entries)}
 
 def analyze(state: AgentState):
     prompt = f"""
@@ -177,7 +199,8 @@ builder.add_node("query_capture", query_capture)
 builder.add_node("analyze", analyze)
 
 builder.add_edge(START, "load_context")
-builder.add_edge("load_context", "select_source")
+builder.add_edge("load_context", "load_docs_index")
+builder.add_edge("load_docs_index", "select_source")
 builder.add_edge("select_source", "inspect_source")
 builder.add_edge("inspect_source", "query_capture")
 builder.add_edge("query_capture", "analyze")
@@ -203,6 +226,8 @@ if __name__ == "__main__":
             "task": task
         })
 
+        print("\nDocs index:")
+        print(result["docs_index"])
         print(f"\nSelected source: {result['selected_source']}")
         print()
         print(result["result"])
