@@ -2,7 +2,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $python = Join-Path $root ".venv\Scripts\python.exe"
 $proxy = Join-Path $root "HermesProxy.py"
-$agent = Join-Path $PSScriptRoot "test_llm.py"
+$agent = Join-Path $PSScriptRoot "main.py"
 
 Write-Host "Starting Delta LLM Proxy..."
 
