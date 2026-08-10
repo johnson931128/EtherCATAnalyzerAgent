@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from typing import TypedDict
@@ -11,11 +12,13 @@ class AgentState(TypedDict):
     context: str
     selected_source: str
     source_code: str
+    capture_evidence: str
     result: str
 
 
 PROJECT_ROOT = Path(r"D:\EtherCATAnalyzer\EtherCATAnalyzer_net472")
 AGENTS_PATH = PROJECT_ROOT / "AGENTS.md"
+CAPTURE_PATH = Path(r"D:\EtherCATAnalyzer\Data\Json\ethercat-datagrams.json")
 
 SOURCE_FILES = {
     "slave_discovery": PROJECT_ROOT / "AnalyzerDll" / "EtherCATAnalyzer" / "Analysis" / "SlaveDiscoveryAnalyzer.cs",
@@ -32,6 +35,21 @@ llm = ChatOpenAI(
     timeout=120,
     max_retries=0,
 )
+
+
+def parse_number(value):
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    text = str(value).strip()
+
+    if text.lower().startswith("0x"):
+        return int(text, 16)
+
+    return int(text)
 
 
 def load_context(state: AgentState):
@@ -63,7 +81,7 @@ slave_discovery
 datagram_record
 discovered_slave
 
-只回覆選項名稱。
+只回覆選項名稱，不要解釋。
 """
 
     response = llm.invoke(prompt)
@@ -75,23 +93,75 @@ def inspect_source(state: AgentState):
     source_code = source_path.read_text(encoding="utf-8")
     return {"source_code": source_code}
 
+def calculate_topology_position(initial_adp):
+    distance_from_zero = (-initial_adp) & 0xFFFF
+    return distance_from_zero + 1
+
+def query_capture(state: AgentState):
+    records = json.loads(CAPTURE_PATH.read_text(encoding="utf-8"))
+
+    matches = []
+
+    for record in records:
+        command_code = parse_number(record.get("CommandCode"))
+        ado = parse_number(record.get("Ado"))
+        working_counter = parse_number(record.get("WorkingCounter"))
+
+        if command_code != 0x02:
+            continue
+
+        if ado != 0x0010:
+            continue
+
+        if working_counter != 0:
+            continue
+
+        adp = parse_number(record.get("Adp"))
+
+        matches.append({
+            "FrameNumber": record.get("FrameNumber"),
+            "DatagramSequence": record.get("DatagramSequence"),
+            "CommandCode": record.get("CommandCode"),
+            "Adp": record.get("Adp"),
+            "Ado": record.get("Ado"),
+            "DataHex": record.get("RegisterDataHex") or record.get("DataHex"),
+            "WorkingCounter": record.get("WorkingCounter"),
+            "CalculatedTopologyPosition": calculate_topology_position(adp),
+        })
+
+    capture_evidence = json.dumps(matches[:20], ensure_ascii=False, indent=2)
+
+    return {"capture_evidence": capture_evidence}
+
 
 def analyze(state: AgentState):
     prompt = f"""
 以下是 EtherCATAnalyzer 專案規則：
+CalculatedTopologyPosition 是 Python 依照目前 C# 實作的 16-bit unchecked arithmetic 預先計算的 deterministic evidence。
+不得自行重新計算或覆寫此值。
 
 {state["context"]}
 
-目前選擇的程式碼：
-{state["selected_source"]}
-
-程式碼內容：
+以下是目前分析的 source code：
 
 {state["source_code"]}
+
+以下是從 ethercat-datagrams.json 實際查詢得到的 capture evidence。
+這些資料代表專案實際觀察到的封包行為：
+
+{state["capture_evidence"]}
 
 任務：
 
 {state["task"]}
+
+分析時必須區分：
+
+1. Source code 實際實作的行為。
+2. Capture evidence 實際觀察到的行為。
+3. 沒有 evidence 支持的 EtherCAT protocol facts 不要自行假設。
+
+如果一般知識與 capture evidence 衝突，描述本專案行為時以 capture evidence 為準。
 """
 
     response = llm.invoke(prompt)
@@ -103,12 +173,14 @@ builder = StateGraph(AgentState)
 builder.add_node("load_context", load_context)
 builder.add_node("select_source", select_source)
 builder.add_node("inspect_source", inspect_source)
+builder.add_node("query_capture", query_capture)
 builder.add_node("analyze", analyze)
 
 builder.add_edge(START, "load_context")
 builder.add_edge("load_context", "select_source")
 builder.add_edge("select_source", "inspect_source")
-builder.add_edge("inspect_source", "analyze")
+builder.add_edge("inspect_source", "query_capture")
+builder.add_edge("query_capture", "analyze")
 builder.add_edge("analyze", END)
 
 graph = builder.compile()
