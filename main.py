@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from graph import graph
+from source_retrieval import search_source
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -10,6 +11,7 @@ RESULT_PATH = PROJECT_ROOT / "result.md"
 
 HELP_TEXT = """Commands:
   /read task.md  Read the project task.md and run it through the Agent
+  /source QUERY  Search C# source files without invoking the Agent graph
   /help          Show this help
   /exit          Exit the Agent
 
@@ -72,6 +74,21 @@ def run_task(task):
     return graph_result
 
 
+def print_source_results(query):
+    """Print compact deterministic source matches for one CLI query."""
+    results = search_source(query)
+    if not results:
+        print(f"No C# source matches found for: {query}")
+        return
+
+    print(f"C# source matches for: {query}")
+    for index, result in enumerate(results, start=1):
+        symbols = ", ".join(result["matched_symbols"]) or "(text match only)"
+        print(f"{index}. {result['path']}")
+        print(f"   Symbols: {symbols}")
+        print(f"   Match: {result['reason']}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -92,6 +109,13 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command.startswith("/source"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/source":
+                print("Usage: /source <query>")
+                continue
+            print_source_results(parts[1].strip())
             continue
         if command.startswith("/read"):
             parts = user_input.split(maxsplit=1)
