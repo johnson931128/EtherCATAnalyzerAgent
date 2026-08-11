@@ -1,5 +1,11 @@
-幫我檢查這個 Slave Discovery 結果是否正確
+請根據 ET1100 Spec 建立 EtherCAT EEPROM 文件。
 
-Slave count: 2
-Position: 1, Initial ADP: 0x0000, Configured Address: 0x0001, Vendor ID: 0x000001DD, Product Code: 0x1041000F
-Position: 2, Initial ADP: 0xFFFF, Configured Address: 0x0002, Vendor ID: 0x000001DD, Product Code: 0x1041000F
+內容包含：
+- EEPROM 基本用途
+- 0x0502 EEPROM Control / Status
+- 0x0504 EEPROM Address
+- 0x0508 EEPROM Data
+- EEPROM Read Procedure
+- Vendor ID
+- Product Code
+- 對 EtherCAT Analyzer 實作有用的重點
