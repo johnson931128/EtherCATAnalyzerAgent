@@ -291,6 +291,25 @@ def _apply_grounded_eeprom_sections(
 
     markdown = _replace_section(
         markdown,
+        "## Overview",
+        """- **Spec fact:** The ESI EEPROM contains configuration data and identity fields such as Vendor ID, Product Code, Revision Number, and Serial Number. (Pages 94, 95)
+- **Spec fact:** The ESC Configuration Area at word addresses 0x0000–0x0007 is protected by a checksum. (Page 94)
+- **Engineering explanation:** The checksum protects the ESC Configuration Area; it should not be described as protecting every identity field in the EEPROM.
+- **Analyzer note:** EEPROM identity reconstruction uses the field word addresses and returned data independently of the Configuration Area checksum.""",
+        "## EEPROM Interface",
+    )
+    markdown = _replace_section(
+        markdown,
+        "## EEPROM Interface",
+        """The ESC exposes the EEPROM interface through a dedicated ESC register block. The interface may be controlled by EtherCAT or the PDI depending on the access assignment.
+
+- **Spec fact:** The EEPROM interface occupies ESC registers 0x0500–0x050F. (Pages 95, 128, 168)
+- **Engineering explanation:** These are ESC registers shared through the configured access mechanism, not a register block that belongs exclusively to the PDI.
+- **Analyzer note:** Capture analysis should interpret accesses according to the EtherCAT/PDI assignment and the individual control, address, and data registers.""",
+        "### 0x0502 EEPROM Control / Status",
+    )
+    markdown = _replace_section(
+        markdown,
         "### 0x0502 EEPROM Control / Status",
         f"""- **Spec fact:** Bit 15 is Busy. A new EEPROM command starts only when Busy is 0. (Pages {pages_0502})
 - **Spec fact:** Bit 0 is ECAT EEPROM Write Enable for EEPROM write commands. (Pages {pages_0502})
@@ -373,6 +392,25 @@ def validate_draft(draft: str, evidence: Sequence[Evidence]) -> List[str]:
     for marker in ("Spec fact", "Engineering explanation", "Analyzer note"):
         if marker.casefold() not in draft.casefold():
             errors.append(f"missing distinction marker: {marker}")
+
+    overview = draft.split("## Overview", 1)[-1].split("## EEPROM Interface", 1)[0]
+    interface = draft.split("## EEPROM Interface", 1)[-1].split(
+        "### 0x0502 EEPROM Control / Status", 1
+    )[0]
+    if "pdi registers" in draft.casefold():
+        errors.append("EEPROM interface is incorrectly described as PDI registers")
+    if not all(
+        marker in interface.casefold()
+        for marker in ("dedicated esc register block", "ethercat", "pdi", "access assignment")
+    ):
+        errors.append("EEPROM interface ownership/access terminology is incomplete")
+    if not all(
+        marker in overview.casefold()
+        for marker in ("configuration data", "identity fields", "0x0000", "0x0007", "checksum")
+    ):
+        errors.append("EEPROM identity/checksum scope terminology is incomplete")
+    if "secured with a checksum" in overview.casefold():
+        errors.append("EEPROM identity fields are incorrectly described as checksum-protected")
 
     identity = draft.split("## Identity Information", 1)[-1]
     vendor = identity.split("### Product Code", 1)[0]
@@ -543,6 +581,14 @@ by the evidence. Clearly label content in each relevant section as:
 The Source References section should identify the ET1100 PDF. Cite only the
 supplied PDF page numbers. Match the concise,
 heading/table/code-block/list style shown in the supplied docs/read context.
+Describe 0x0500–0x050F as a dedicated ESC register block, not as PDI
+registers. State that the EEPROM interface may be controlled by EtherCAT or
+the PDI depending on the access assignment.
+State that the ESI EEPROM contains configuration data and identity fields such
+as Vendor ID, Product Code, Revision Number, and Serial Number. Scope checksum
+protection specifically to the ESC Configuration Area at word addresses
+0x0000–0x0007; do not imply that every listed identity field is protected by
+that checksum.
 Use EEPROM_Field_Mapping.md as analyzer context for the existing word-address
 convention: Vendor ID 0x0008 and Product Code 0x000A. Preserve the ET1100 PDF
 field labels 0x8:0x9 and 0xA:0xB when describing the source fact, and do not
