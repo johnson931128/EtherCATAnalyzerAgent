@@ -3,6 +3,7 @@ from typing import TypedDict
 
 class AgentState(TypedDict):
     task: str
+    task_type: str
     context: str
     docs_index: str
     selected_docs: str
@@ -12,3 +13,5 @@ class AgentState(TypedDict):
     capture_mode: str
     capture_evidence: str
     result: str
+    pdf_evidence: list
+    build_docs_validation: str

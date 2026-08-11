@@ -1,6 +1,7 @@
 from langgraph.graph import END, START, StateGraph
 
 from analysis import analyze
+from build_docs import build_docs
 from capture import query_capture, select_capture_mode
 from context import load_context
 from docs import load_docs_index, load_selected_docs, select_docs
@@ -9,9 +10,26 @@ from source import inspect_source, select_source
 from state import AgentState
 
 
+def is_build_docs_task(task: str) -> bool:
+    lowered = task.casefold()
+    return "build_docs" in lowered or (
+        "markdown" in lowered
+        and ("pdf" in lowered or "documentation" in lowered)
+    )
+
+
+def route_task(state: AgentState) -> str:
+    if is_build_docs_task(state["task"]):
+        return "build_docs"
+    if is_result_check_task(state["task"]):
+        return "result_check"
+    return "analysis"
+
+
 builder = StateGraph(AgentState)
 
 builder.add_node("route_task", lambda state: state)
+builder.add_node("build_docs", build_docs)
 builder.add_node("load_context", load_context)
 builder.add_node("load_docs_index", load_docs_index)
 builder.add_node("select_docs", select_docs)
@@ -26,12 +44,14 @@ builder.add_node("result_check", result_check)
 builder.add_edge(START, "route_task")
 builder.add_conditional_edges(
     "route_task",
-    lambda state: "result_check" if is_result_check_task(state["task"]) else "analysis",
+    route_task,
     {
+        "build_docs": "build_docs",
         "result_check": "result_check",
         "analysis": "load_context",
     },
 )
+builder.add_edge("build_docs", END)
 builder.add_edge("load_context", "load_docs_index")
 builder.add_edge("load_docs_index", "select_docs")
 builder.add_edge("select_docs", "load_selected_docs")

@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 from graph import graph
@@ -32,12 +33,35 @@ def build_result_document(task, graph_result):
     )
 
 
-def main():
-    task = TASK_PATH.read_text(encoding="utf-8")
+def append_build_docs_result(existing, draft):
+    marker = "# Generated ET1100 Documentation Draft"
+    if marker in existing:
+        existing = existing.split(marker, 1)[0].rstrip()
+
+    separator = "\n\n---\n\n"
+    return (
+        existing.rstrip()
+        + separator
+        + marker
+        + "\n\n"
+        + draft.strip()
+        + "\n"
+    )
+
+
+def main(task_override=None):
+    task = task_override or TASK_PATH.read_text(encoding="utf-8")
     graph_result = graph.invoke({"task": task})
-    result_document = build_result_document(task, graph_result)
+    if graph_result.get("task_type") == "build_docs":
+        existing = RESULT_PATH.read_text(encoding="utf-8") if RESULT_PATH.exists() else ""
+        result_document = append_build_docs_result(existing, graph_result["result"])
+    else:
+        result_document = build_result_document(task, graph_result)
     RESULT_PATH.write_text(result_document, encoding="utf-8")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", help="Task text override; task.md remains unchanged")
+    args = parser.parse_args()
+    main(args.task)
