@@ -96,14 +96,142 @@ def _comparison_line(label, field, expected, actual):
     return lines
 
 
-def check_stage3_result(task, expected_slaves):
+def _format_evidence_value(field, value):
+    if value is None:
+        return "<missing>"
+
+    if isinstance(value, int):
+        if field in {"EepromWordAddress", "Ado"}:
+            return f"0x{value:04X}"
+
+        if field in {"EepromData", "OutgoingAdp"}:
+            return f"0x{value:08X}"
+
+    return str(value)
+
+
+def _append_evidence(lines, label, evidence, fields):
+    lines.append(f"- {label}")
+
+    if evidence is None:
+        lines.append("  - Evidence: <missing>")
+        return
+
+    for field in fields:
+        lines.append(
+            f"  - {field}: {_format_evidence_value(field, evidence.get(field))}"
+        )
+
+
+def _format_slave_values(lines, slaves):
+    for index, slave in enumerate(slaves):
+        lines.extend(["", f"Slave {index + 1}"])
+
+        for label, field in (
+            ("Topology Position", "position"),
+            ("Initial ADP", "initial_adp"),
+            ("Configured Address", "configured_address"),
+            ("Vendor ID", "vendor_id"),
+            ("Product Code", "product_code"),
+        ):
+            lines.append(
+                f"- {label}: {_format_value(field, slave.get(field))}"
+            )
+
+
+def format_actual_result(parsed):
+    lines = [f"- Slave count: {_format_value('slave_count', parsed['slave_count'])}"]
+    _format_slave_values(lines, parsed["slaves"])
+    return "\n".join(lines)
+
+
+def format_capture_evidence(expected_slaves):
+    lines = [f"Source: {CAPTURE_PATH}"]
+
+    for index, slave in enumerate(expected_slaves):
+        evidence = slave.get("evidence", {})
+        lines.extend(["", f"Slave {index + 1}"])
+        topology_evidence = evidence.get("topology")
+        _append_evidence(
+            lines,
+            "TopologyPosition",
+            topology_evidence,
+            (
+                "OutgoingFrame",
+                "OutgoingAdp",
+                "Ado",
+                "CalculatedTopologyPosition",
+            ),
+        )
+        _append_evidence(
+            lines,
+            "InitialAutoIncrementAddress",
+            topology_evidence,
+            ("OutgoingFrame", "OutgoingAdp"),
+        )
+        _append_evidence(
+            lines,
+            "ConfiguredStationAddress",
+            evidence.get("configured_address"),
+            (
+                "OutgoingFrame",
+                "ReturningFrame",
+                "Ado",
+                "ConfiguredStationAddressData",
+                "WorkingCounterDelta",
+            ),
+        )
+        _append_evidence(
+            lines,
+            "VendorId",
+            evidence.get("vendor_id"),
+            (
+                "ControlOutgoingFrame",
+                "ControlReturningFrame",
+                "DataOutgoingFrame",
+                "DataReturningFrame",
+                "EepromWordAddress",
+                "EepromData",
+                "CalculatedTopologyPosition",
+                "WorkingCounterDelta",
+            ),
+        )
+        _append_evidence(
+            lines,
+            "ProductCode",
+            evidence.get("product_code"),
+            (
+                "ControlOutgoingFrame",
+                "ControlReturningFrame",
+                "DataOutgoingFrame",
+                "DataReturningFrame",
+                "EepromWordAddress",
+                "EepromData",
+                "CalculatedTopologyPosition",
+                "WorkingCounterDelta",
+            ),
+        )
+
+    return "\n".join(lines)
+
+
+def format_expected_result(expected_slaves):
+    lines = [f"- Slave count: {len(expected_slaves)}"]
+    _format_slave_values(lines, expected_slaves)
+    return "\n".join(lines)
+
+
+def format_verification_result(task, expected_slaves):
     actual_result = parse_stage3_console_output(task)
     actual_slaves = actual_result["slaves"]
     expected_count = len(expected_slaves)
     count_passed = actual_result["slave_count"] == expected_count
     all_passed = count_passed and len(actual_slaves) == expected_count
-    lines = [f"Stage 3 Result Check: {'PASS' if all_passed else 'FAIL'}", ""]
-    lines.append(f"Slave count: {'PASS' if count_passed else 'FAIL'}")
+    lines = [
+        f"Stage 3 Result Check: {'PASS' if all_passed else 'FAIL'}",
+        "",
+        f"Slave count: {'PASS' if count_passed else 'FAIL'}",
+    ]
 
     if not count_passed:
         lines.append(f"Expected: {expected_count}")
@@ -134,6 +262,21 @@ def check_stage3_result(task, expected_slaves):
 
     lines[0] = f"Stage 3 Result Check: {'PASS' if all_passed else 'FAIL'}"
     return "\n".join(lines)
+
+
+def check_stage3_result(task, expected_slaves):
+    parsed = parse_stage3_console_output(task)
+
+    return "\n\n".join(
+        (
+            "### Actual Result\n" + format_actual_result(parsed),
+            "### Capture Evidence\n" + format_capture_evidence(expected_slaves),
+            "### Reconstructed Expected Result\n"
+            + format_expected_result(expected_slaves),
+            "### Verification Result\n"
+            + format_verification_result(task, expected_slaves),
+        )
+    )
 
 
 def result_check(state: AgentState):

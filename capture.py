@@ -262,11 +262,23 @@ def derive_stage3_result(records):
                 "configured_address": None,
                 "vendor_id": None,
                 "product_code": None,
+                "evidence": {
+                    "topology": {
+                        "OutgoingFrame": evidence["OutgoingFrame"],
+                        "OutgoingAdp": outgoing.get("Adp"),
+                        "Ado": outgoing.get("Ado"),
+                        "CalculatedTopologyPosition": topology_position,
+                    },
+                    "configured_address": None,
+                    "vendor_id": None,
+                    "product_code": None,
+                },
             }
 
     for pair in pairs:
         outgoing = pair["Outgoing"]
         returning = pair["Returning"]
+        evidence = build_pair_evidence(pair)
 
         if (
             outgoing is None
@@ -302,6 +314,16 @@ def derive_stage3_result(records):
 
         if slave is not None:
             slave["configured_address"] = configured_address
+            slave["evidence"]["configured_address"] = {
+                "OutgoingFrame": evidence["OutgoingFrame"],
+                "ReturningFrame": evidence["ReturningFrame"],
+                "Ado": outgoing.get("Ado"),
+                "ConfiguredStationAddressData": (
+                    outgoing.get("RegisterDataHex")
+                    or outgoing.get("DataHex")
+                ),
+                "WorkingCounterDelta": evidence["WorkingCounterDelta"],
+            }
 
     pending_eeprom_reads = {}
 
@@ -332,7 +354,11 @@ def derive_stage3_result(records):
                 parse_number(returning.get("WorkingCounter"))
                 == parse_number(outgoing.get("WorkingCounter")) + 1
             ):
-                pending_eeprom_reads[topology_position] = word_address
+                pending_eeprom_reads[topology_position] = {
+                    "word_address": word_address,
+                    "control_evidence": build_pair_evidence(pair),
+                    "control_outgoing": outgoing,
+                }
 
             continue
 
@@ -345,18 +371,40 @@ def derive_stage3_result(records):
         ):
             continue
 
-        word_address = pending_eeprom_reads.get(topology_position)
+        pending_read = pending_eeprom_reads.get(topology_position)
         slave = slaves_by_position.get(topology_position)
 
-        if word_address is None or slave is None:
+        if pending_read is None or slave is None:
             continue
 
+        word_address = pending_read["word_address"]
         eeprom_data = parse_number(returning.get("EepromData"))
+        data_evidence = build_pair_evidence(pair)
+        identity_evidence = {
+            "ControlOutgoingFrame": pending_read["control_evidence"][
+                "OutgoingFrame"
+            ],
+            "ControlReturningFrame": pending_read["control_evidence"][
+                "ReturningFrame"
+            ],
+            "DataOutgoingFrame": data_evidence["OutgoingFrame"],
+            "DataReturningFrame": data_evidence["ReturningFrame"],
+            "EepromWordAddress": pending_read["control_outgoing"].get(
+                "EepromWordAddress"
+            ),
+            "EepromData": returning.get("EepromData"),
+            "CalculatedTopologyPosition": data_evidence[
+                "CalculatedTopologyPosition"
+            ],
+            "WorkingCounterDelta": data_evidence["WorkingCounterDelta"],
+        }
 
         if word_address == 0x0008:
             slave["vendor_id"] = eeprom_data
+            slave["evidence"]["vendor_id"] = identity_evidence
         elif word_address == 0x000A:
             slave["product_code"] = eeprom_data
+            slave["evidence"]["product_code"] = identity_evidence
 
         pending_eeprom_reads.pop(topology_position, None)
 
