@@ -18,8 +18,8 @@ if __name__ == "__main__":
             "task": task
         })
 
-        print(f"\nSelected docs:\n{result['selected_docs']}")
-        print(f"\nSelected source: {result['selected_source']}")
-        print(f"Capture mode: {result['capture_mode']}")
+        print(f"\nSelected docs:\n{result.get('selected_docs', '')}")
+        print(f"\nSelected source: {result.get('selected_source', '')}")
+        print(f"Capture mode: {result.get('capture_mode', '')}")
         print()
         print(result["result"])

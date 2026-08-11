@@ -19,6 +19,21 @@ def parse_number(value):
     return int(text)
 
 
+def parse_hex_number(value):
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    text = str(value).strip()
+
+    if text.lower().startswith("0x"):
+        text = text[2:]
+
+    return int(text, 16)
+
+
 def calculate_topology_position(initial_adp):
     distance_from_zero = (-initial_adp) & 0xFFFF
     return distance_from_zero + 1
@@ -217,6 +232,138 @@ def query_eeprom_capture(pairs):
         matches.append(evidence)
 
     return matches[:40]
+
+
+def derive_stage3_result(records):
+    """Derive the Slave Discovery result from paired capture evidence."""
+    pairs = build_auto_increment_pairs(records)
+    slaves_by_position = {}
+
+    for pair in pairs:
+        outgoing = pair["Outgoing"]
+        returning = pair["Returning"]
+        evidence = build_pair_evidence(pair)
+
+        if (
+            outgoing is None
+            or returning is None
+            or parse_number(outgoing.get("Adp")) is None
+            or evidence["ReturningWorkingCounter"] == 0
+        ):
+            continue
+
+        initial_adp = parse_number(outgoing.get("Adp"))
+        topology_position = evidence["CalculatedTopologyPosition"]
+
+        if topology_position not in slaves_by_position:
+            slaves_by_position[topology_position] = {
+                "position": topology_position,
+                "initial_adp": initial_adp,
+                "configured_address": None,
+                "vendor_id": None,
+                "product_code": None,
+            }
+
+    for pair in pairs:
+        outgoing = pair["Outgoing"]
+        returning = pair["Returning"]
+
+        if (
+            outgoing is None
+            or returning is None
+            or parse_number(outgoing.get("Adp")) is None
+            or parse_number(outgoing.get("Ado")) != 0x0010
+            or parse_number(outgoing.get("CommandCode")) != 0x02
+            or parse_number(outgoing.get("DataLength")) != 2
+            or (
+                parse_number(returning.get("WorkingCounter"))
+                - parse_number(outgoing.get("WorkingCounter"))
+                != 1
+            )
+        ):
+            continue
+
+        configured_address = outgoing.get("RegisterDataHex")
+        if configured_address is None:
+            configured_address = outgoing.get("DataHex")
+
+        if configured_address is None:
+            continue
+
+        try:
+            configured_address = parse_hex_number(configured_address)
+        except (TypeError, ValueError):
+            continue
+
+        topology_position = calculate_topology_position(
+            parse_number(outgoing.get("Adp"))
+        )
+        slave = slaves_by_position.get(topology_position)
+
+        if slave is not None:
+            slave["configured_address"] = configured_address
+
+    pending_eeprom_reads = {}
+
+    for pair in pairs:
+        outgoing = pair["Outgoing"]
+        returning = pair["Returning"]
+
+        if outgoing is None or parse_number(outgoing.get("Adp")) is None:
+            continue
+
+        topology_position = calculate_topology_position(
+            parse_number(outgoing.get("Adp"))
+        )
+        command_code = parse_number(outgoing.get("CommandCode"))
+        ado = parse_number(outgoing.get("Ado"))
+
+        if command_code == 0x02 and ado == 0x0502:
+            control_status = parse_number(outgoing.get("EepromControlStatus"))
+            word_address = parse_number(outgoing.get("EepromWordAddress"))
+
+            if control_status is None or word_address is None:
+                continue
+
+            if control_status & 0x0700 != 0x0100:
+                continue
+
+            if (
+                parse_number(returning.get("WorkingCounter"))
+                == parse_number(outgoing.get("WorkingCounter")) + 1
+            ):
+                pending_eeprom_reads[topology_position] = word_address
+
+            continue
+
+        if (
+            command_code != 0x01
+            or ado != 0x0508
+            or parse_number(returning.get("EepromData")) is None
+            or parse_number(returning.get("WorkingCounter"))
+            != parse_number(outgoing.get("WorkingCounter")) + 1
+        ):
+            continue
+
+        word_address = pending_eeprom_reads.get(topology_position)
+        slave = slaves_by_position.get(topology_position)
+
+        if word_address is None or slave is None:
+            continue
+
+        eeprom_data = parse_number(returning.get("EepromData"))
+
+        if word_address == 0x0008:
+            slave["vendor_id"] = eeprom_data
+        elif word_address == 0x000A:
+            slave["product_code"] = eeprom_data
+
+        pending_eeprom_reads.pop(topology_position, None)
+
+    return [
+        slaves_by_position[position]
+        for position in sorted(slaves_by_position)
+    ]
 
 
 def query_capture(state: AgentState):
