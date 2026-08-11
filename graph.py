@@ -12,9 +12,38 @@ from state import AgentState
 
 def is_build_docs_task(task: str) -> bool:
     lowered = task.casefold()
-    return "build_docs" in lowered or (
+    if "build_docs" in lowered:
+        return True
+
+    if "markdown" in lowered and (
+        "pdf" in lowered or "documentation" in lowered
+    ):
+        return True
+
+    has_eeprom = "eeprom" in lowered
+    has_document_intent = any(
+        marker in lowered
+        for marker in ("markdown", "documentation", "docs/read", "文件", "規格")
+    )
+    has_generation_intent = any(
+        marker in lowered
+        for marker in (
+            "create",
+            "draft",
+            "generate",
+            "建立",
+            "整理",
+        )
+    )
+
+    return (
+        has_eeprom
+        and has_document_intent
+        and has_generation_intent
+    ) or (
         "markdown" in lowered
-        and ("pdf" in lowered or "documentation" in lowered)
+        and "eeprom" in lowered
+        and "et1100" in lowered
     )
 
 
