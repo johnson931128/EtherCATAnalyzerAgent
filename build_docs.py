@@ -1,6 +1,7 @@
 """ET1100 evidence collection and Markdown documentation generation."""
 
 from pathlib import Path
+import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from config import DOCS_READ_PATH, ET1100_SPEC_PATH
@@ -183,16 +184,14 @@ def load_style_context() -> str:
 
 
 def _format_evidence(evidence: Sequence[Evidence]) -> str:
-    lines = ["### Evidence Used", ""]
+    topics: Dict[str, List[int]] = {}
     for item in evidence:
-        excerpt = str(item["excerpt"]).strip()
-        lines.extend(
-            (
-                f"- Topic: {item['topic']}",
-                f"  - PDF page: {item['page_num']}",
-                f"  - Excerpt: {excerpt}",
-            )
-        )
+        topics.setdefault(str(item["topic"]), []).append(int(item["page_num"]))
+
+    lines = ["Evidence topics/pages used:", ""]
+    for topic, pages in topics.items():
+        page_list = ", ".join(str(page) for page in sorted(set(pages)))
+        lines.append(f"- {topic}: PDF pages {page_list}")
     return "\n".join(lines)
 
 
@@ -203,9 +202,13 @@ def _strip_markdown_fence(markdown: str) -> str:
 
     # Keep evidence output deterministic and sourced from pdf_spec.py. Qwen
     # occasionally repeats the appendix even when asked not to.
-    appendix_marker = "*Evidence Appendix (Automatically Generated)*"
-    if appendix_marker in markdown:
-        markdown = markdown.split(appendix_marker, 1)[0]
+    for appendix_marker in (
+        "*Evidence Appendix (Automatically Generated)*",
+        "\n### Evidence Used",
+        "\n## Evidence Used",
+    ):
+        if appendix_marker in markdown:
+            markdown = markdown.split(appendix_marker, 1)[0]
     return markdown.strip()
 
 
@@ -252,17 +255,29 @@ def validate_draft(draft: str, evidence: Sequence[Evidence]) -> List[str]:
     if not ("byte" in address.casefold() and "address" in address.casefold()):
         errors.append("0x0504 section does not distinguish byte addressing")
 
-    for item in evidence:
-        topic = str(item["topic"])
-        page = str(item["page_num"])
-        excerpt = str(item["excerpt"]).strip()
-        if topic not in draft or f"PDF page: {page}" not in draft:
-            errors.append(f"missing evidence reference: {topic}, page {page}")
-        excerpt_anchor = " ".join(excerpt.split())[:60]
-        if excerpt_anchor and excerpt_anchor not in " ".join(draft.split()):
-            errors.append(f"missing evidence excerpt: {topic}, page {page}")
+    if "Evidence Used" in draft or "Evidence Appendix" in draft:
+        errors.append("documentation draft contains an evidence appendix")
+
+    evidence_pages = {int(item["page_num"]) for item in evidence}
+    cited_pages = set()
+    for match in re.finditer(r"\bPages?\s+([0-9][0-9,\s–—-]*)", draft, re.IGNORECASE):
+        cited_pages.update(int(number) for number in re.findall(r"\d+", match.group(1)))
+
+    if not cited_pages:
+        errors.append("documentation draft contains no PDF page references")
+    unknown_pages = sorted(cited_pages - evidence_pages)
+    if unknown_pages:
+        errors.append(f"documentation draft cites pages outside selected evidence: {unknown_pages}")
 
     return errors
+
+
+def write_validated_document(draft: str, target_path: Path) -> str:
+    """Write a validated documentation body and return created/updated status."""
+    status = "updated" if target_path.exists() else "created"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(draft.rstrip() + "\n", encoding="utf-8")
+    return status
 
 
 def _build_prompt(task: str, evidence: Sequence[Evidence], style_context: str) -> str:
@@ -331,8 +346,6 @@ def build_docs(state: AgentState):
 
     if "## Source References" not in draft:
         draft += "\n\n## Source References"
-    draft += "\n\n" + _format_evidence(evidence) + "\n"
-
     validation_errors = validate_draft(draft, evidence)
     if validation_errors:
         raise ValueError(
@@ -340,10 +353,22 @@ def build_docs(state: AgentState):
             + "\n- ".join(validation_errors)
         )
 
+    target_path = DOCS_READ_PATH / "EtherCAT_EEPROM.md"
+    file_status = write_validated_document(draft, target_path)
+    result = (
+        "# Build Docs Execution Report\n\n"
+        f"Generated file: {target_path}\n"
+        f"File action: {file_status}\n"
+        "Validation: PASS\n\n"
+        f"{_format_evidence(evidence)}"
+    )
+
     return {
-        "result": draft,
+        "result": result,
         "capture_mode": "build_docs",
         "task_type": "build_docs",
         "pdf_evidence": evidence,
         "build_docs_validation": "PASS",
+        "generated_file_path": str(target_path),
+        "generated_file_status": file_status,
     }

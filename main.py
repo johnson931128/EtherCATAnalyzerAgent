@@ -33,18 +33,22 @@ def build_result_document(task, graph_result):
     )
 
 
-def append_build_docs_result(existing, draft):
-    marker = "# Generated ET1100 Documentation Draft"
-    if marker in existing:
-        existing = existing.split(marker, 1)[0].rstrip()
+def append_build_docs_result(existing, report):
+    for marker in (
+        "# Generated ET1100 Documentation Draft",
+        "# Build Docs Execution Report",
+    ):
+        if marker in existing:
+            existing = existing.split(marker, 1)[0].rstrip()
+
+    while existing.endswith("---"):
+        existing = existing[:-3].rstrip()
 
     separator = "\n\n---\n\n"
     return (
         existing.rstrip()
         + separator
-        + marker
-        + "\n\n"
-        + draft.strip()
+        + report.strip()
         + "\n"
     )
 

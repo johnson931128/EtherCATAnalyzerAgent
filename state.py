@@ -15,3 +15,5 @@ class AgentState(TypedDict):
     result: str
     pdf_evidence: list
     build_docs_validation: str
+    generated_file_path: str
+    generated_file_status: str
