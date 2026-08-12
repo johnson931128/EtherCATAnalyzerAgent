@@ -3,6 +3,7 @@ from typing import TypedDict
 
 class AgentState(TypedDict):
     task: str
+    route_mode: str
     task_type: str
     context: str
     docs_index: str
@@ -17,3 +18,4 @@ class AgentState(TypedDict):
     build_docs_validation: str
     generated_file_path: str
     generated_file_status: str
+    tools_used: list

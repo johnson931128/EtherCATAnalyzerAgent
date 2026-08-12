@@ -72,9 +72,12 @@ def append_build_docs_result(existing, report):
     )
 
 
-def run_task(task):
+def run_task(task, use_tool_agent=False):
     """Run one task through the existing graph and persist its result."""
-    graph_result = graph.invoke({"task": task})
+    graph_input = {"task": task}
+    if use_tool_agent:
+        graph_input["route_mode"] = "tool_agent"
+    graph_result = graph.invoke(graph_input)
     if graph_result.get("task_type") == "build_docs":
         existing = RESULT_PATH.read_text(encoding="utf-8") if RESULT_PATH.exists() else ""
         result_document = append_build_docs_result(existing, graph_result["result"])
@@ -255,7 +258,9 @@ def interactive_cli():
             task = user_input
 
         try:
-            run_task(task)
+            graph_result = run_task(task, use_tool_agent=not user_input.startswith("/"))
+            for tool_name in graph_result.get("tools_used", []):
+                print(f"Tool: {tool_name}")
             print(f"Completed. Result written to {RESULT_PATH}")
         except Exception as exc:
             print(f"Task failed: {exc}")
