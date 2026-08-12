@@ -3,6 +3,7 @@ from pathlib import Path
 
 from graph import graph
 from pdf_spec import search_pdf
+from spec_retrieval import select_spec_with_llm
 from source_retrieval import search_source, select_source_with_llm
 
 
@@ -15,6 +16,7 @@ HELP_TEXT = """Commands:
   /source QUERY  Search C# source files without invoking the Agent graph
   /source-ai TASK  Ask Qwen to select relevant C# source files
   /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
+  /spec-ai TASK   Ask Qwen to select relevant ET1100 PDF pages
   /help          Show this help
   /exit          Exit the Agent
 
@@ -114,6 +116,24 @@ def print_spec_results(query):
         print(f"   Excerpt: {result['excerpt']}")
 
 
+def print_spec_ai_results(task):
+    """Print selected ET1100 PDF pages with short excerpts only."""
+    result = select_spec_with_llm(task)
+    selected_pages = result["selected_pages"]
+    page_texts = result["page_texts"]
+    if not selected_pages:
+        print("No relevant ET1100 PDF pages found.")
+        return
+
+    print(f"ET1100 selected pages for: {task}")
+    for page_num in selected_pages:
+        excerpt = " ".join(page_texts[page_num].split())
+        if len(excerpt) > 240:
+            excerpt = excerpt[:240].rstrip() + "..."
+        print(f"\nPDF page {page_num}")
+        print(f"   Excerpt: {excerpt}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -134,6 +154,16 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command.startswith("/spec-ai"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/spec-ai":
+                print("Usage: /spec-ai <task>")
+                continue
+            try:
+                print_spec_ai_results(parts[1].strip())
+            except Exception as exc:
+                print(f"Spec selection failed: {exc}")
             continue
         if command.startswith("/spec"):
             parts = user_input.split(maxsplit=1)
