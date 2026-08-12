@@ -20,3 +20,4 @@
 - 不因為驗證方便而建立 temporary script、temporary file 或額外工具。
 - 若 prompt 要求 commit / push，完成修改後才進行。
 - 若遇到無法在不執行程式的情況下確認的事項，直接在回報中說明，不要自行嘗試 runtime verification。
+- 若 prompt 要求的必要操作因權限、檔案鎖定或環境限制而失敗，停止後續操作並詢問使用者如何處理，不要自行嘗試繞過限制。
