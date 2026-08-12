@@ -1,6 +1,7 @@
 """Bounded read-only tool workflow for engineering analysis."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -14,6 +15,44 @@ from state import AgentState
 
 MAX_TOOL_CALLS = 3
 MAX_QUERY_LENGTH = 200
+_SPEC_STOP_WORDS = {
+    "about",
+    "and",
+    "for",
+    "from",
+    "how",
+    "into",
+    "is",
+    "of",
+    "the",
+    "to",
+    "with",
+}
+_SPEC_FRONT_MATTER = (
+    "document history",
+    "revision history",
+    "table of contents",
+    "contents",
+    "list of tables",
+    "list of figures",
+    "glossary",
+)
+_SPEC_TECHNICAL_TERMS = (
+    "address",
+    "bit",
+    "command",
+    "datagram",
+    "definition",
+    "ethercat",
+    "increment",
+    "procedure",
+    "register",
+    "request",
+    "response",
+    "rule",
+    "table",
+    "working counter",
+)
 
 _SYSTEM_PROMPT = """You are an engineering analysis agent for EtherCATAnalyzer.
 Use only the following read-only tools when their evidence is needed:
@@ -73,9 +112,59 @@ def _search_source_tool(arguments: Any) -> Dict[str, object]:
     }
 
 
+def _spec_search_terms(query: str) -> List[str]:
+    tokens = re.findall(r"0x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9-]*", query)
+    words = [
+        token
+        for token in tokens
+        if token.casefold().startswith("0x")
+        or (len(token) >= 3 and token.casefold() not in _SPEC_STOP_WORDS)
+    ]
+    phrases = [
+        f"{first} {second}"
+        for first, second in zip(words, words[1:])
+    ]
+    terms = [query, *phrases, *words]
+    return list(dict.fromkeys(term.strip() for term in terms if term.strip()))
+
+
+def _score_spec_result(query: str, result: Dict[str, object]) -> int:
+    text = str(result.get("text", ""))
+    folded_text = text.casefold()
+    folded_query = query.casefold()
+    matched_terms = {
+        str(term).casefold() for term in result.get("matches", [])
+    }
+    score = len(matched_terms) * 25
+    if folded_query in folded_text:
+        score += 100
+
+    for term in _SPEC_TECHNICAL_TERMS:
+        if term in folded_text:
+            score += 8
+
+    context = folded_text[:1600]
+    if any(marker in context for marker in ("section ", "table ", "register")):
+        score += 20
+
+    for marker in _SPEC_FRONT_MATTER:
+        if marker in folded_text:
+            score -= 90
+    if "introduction" in context or "general overview" in context:
+        score -= 35
+    return score
+
+
 def _search_spec_tool(arguments: Any) -> Dict[str, object]:
     query = _validated_query(arguments)
-    matches = search_pdf([query])[:5]
+    candidates = search_pdf(_spec_search_terms(query))
+    matches = sorted(
+        candidates,
+        key=lambda result: (
+            -_score_spec_result(query, result),
+            int(result["page_num"]),
+        ),
+    )[:5]
     return {
         "query": query,
         "matches": [
