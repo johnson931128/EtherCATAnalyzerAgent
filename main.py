@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from graph import graph
+from pdf_spec import search_pdf
 from source_retrieval import search_source, select_source_with_llm
 
 
@@ -13,6 +14,7 @@ HELP_TEXT = """Commands:
   /read task.md  Read the project task.md and run it through the Agent
   /source QUERY  Search C# source files without invoking the Agent graph
   /source-ai TASK  Ask Qwen to select relevant C# source files
+  /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
   /help          Show this help
   /exit          Exit the Agent
 
@@ -97,6 +99,21 @@ def print_source_ai_results(task):
         print(path)
 
 
+def print_spec_results(query):
+    """Print up to eight ET1100 PDF matches for one CLI query."""
+    results = search_pdf([query])
+    print(f"ET1100 matches for: {query}")
+    if not results:
+        print("No PDF matches found.")
+        return
+
+    for index, result in enumerate(results[:8], start=1):
+        matched_keyword = result["matches"][0]
+        print(f"\n{index}. PDF page {result['page_num']}")
+        print(f"   Match: {matched_keyword}")
+        print(f"   Excerpt: {result['excerpt']}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -117,6 +134,13 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command.startswith("/spec"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/spec":
+                print("Usage: /spec <query>")
+                continue
+            print_spec_results(parts[1].strip())
             continue
         if command.startswith("/source-ai"):
             parts = user_input.split(maxsplit=1)
