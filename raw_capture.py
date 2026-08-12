@@ -71,48 +71,57 @@ def _first_field_value(value: Any, field_names: Sequence[str]) -> Any:
     return values[0] if values else None
 
 
-def _extract_datagram(packet: Dict[str, Any]) -> Dict[str, Any]:
+def _iter_datagrams(ecat_layer: Any) -> Iterable[Dict[str, Any]]:
+    if isinstance(ecat_layer, list):
+        for item in ecat_layer:
+            yield from _iter_datagrams(item)
+        return
+
+    if not isinstance(ecat_layer, dict):
+        return
+
+    if any(str(key) == "ecat.cmd" for key in ecat_layer):
+        yield ecat_layer
+        return
+
+    for child in ecat_layer.values():
+        if isinstance(child, (dict, list)):
+            yield from _iter_datagrams(child)
+
+
+def _extract_datagram(datagram: Dict[str, Any]) -> Dict[str, Any]:
     datagram_fields = {
-        "Command": ("ecat.command", "ecat.cmd", "Command"),
-        "ADP": ("ecat.adp", "ADP"),
-        "ADO": ("ecat.ado", "ADO"),
-        "Data Length": (
-            "ecat.data_length",
-            "ecat.length",
-            "ecat.len",
-            "Data Length",
-        ),
-        "WKC": ("ecat.wkc", "ecat.working_counter", "WKC"),
+        "Command": ("ecat.cmd",),
+        "ADP": ("ecat.adp",),
+        "ADO": ("ecat.ado",),
+        "Data Length": ("ecat.subframe.length",),
+        "WKC": ("ecat.cnt",),
     }
-
-    ecat_objects = _find_field_values(packet, ("ecat",))
-    candidates = [value for value in ecat_objects if isinstance(value, dict)]
-    candidates.append(packet)
-
-    best_candidate = max(
-        candidates,
-        key=lambda candidate: sum(
-            _first_field_value(candidate, names) is not None
-            for names in datagram_fields.values()
-        ),
-    )
     return {
-        label: _first_field_value(best_candidate, names)
+        label: _first_field_value(datagram, names)
         for label, names in datagram_fields.items()
     }
 
 
 def find_first_coe_sdo_packet(json_path: Path) -> Optional[Dict[str, Any]]:
     """Find and extract the first packet containing a CoE SDO field."""
-    packet = find_first_packet_with_any_field(json_path, COE_SDO_FIELDS)
-    if packet is None:
-        return None
+    document = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    for packet in _iter_packets(document):
+        for ecat_layer in _find_field_values(packet, ("ecat",)):
+            for datagram in _iter_datagrams(ecat_layer):
+                if not _find_field_values(datagram, COE_SDO_FIELDS):
+                    continue
 
-    mailbox = _first_field_value(packet, ("ecat_mailbox",))
-    coe_tree = _first_field_value(packet, ("ecat_mailbox.coe_tree", "coe_tree"))
-    return {
-        "frame_number": _first_field_value(packet, ("frame.number", "Frame Number")),
-        "ecat_mailbox": mailbox,
-        "coe_tree": coe_tree,
-        "datagram": _extract_datagram(packet),
-    }
+                return {
+                    "frame_number": _first_field_value(
+                        packet, ("frame.number", "Frame Number")
+                    ),
+                    "ecat_mailbox": _first_field_value(
+                        datagram, ("ecat_mailbox",)
+                    ),
+                    "coe_tree": _first_field_value(
+                        datagram, ("ecat_mailbox.coe_tree", "coe_tree")
+                    ),
+                    "datagram": _extract_datagram(datagram),
+                }
+    return None
