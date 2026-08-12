@@ -27,6 +27,7 @@ docs/read 是整理過的參考資料，不代表完整 EtherCAT protocol specif
 
 以下是目前分析的 source code：
 
+Source context may contain multiple complete selected C# files.
 {state["source_code"]}
 
 Capture query mode：
