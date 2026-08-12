@@ -1,6 +1,7 @@
 """Deterministic discovery and search for EtherCATAnalyzer C# source files."""
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Dict, List, Sequence, Tuple
@@ -90,6 +91,19 @@ def discover_source_files(root: Path = PROJECT_ROOT) -> List[SourceFileRecord]:
     ]
 
 
+def build_source_manifest(root: Path = PROJECT_ROOT) -> List[Dict[str, object]]:
+    """Build a compact, stable manifest without including source text."""
+    return [
+        {
+            "id": index,
+            "relative_path": str(record.path.relative_to(root)).replace("\\", "/"),
+            "classes": list(record.classes),
+            "methods": list(record.methods),
+        }
+        for index, record in enumerate(discover_source_files(root), start=1)
+    ]
+
+
 def _rank_record(record: SourceFileRecord, query: str) -> Tuple[int, List[str], str]:
     folded_query = query.casefold()
     file_name = record.path.name.casefold()
@@ -166,3 +180,120 @@ def search_source(
         }
         for _, _, record, matched_symbols, reason in ranked[:max_results]
     ]
+
+
+_SEARCH_STOP_WORDS = {
+    "about",
+    "analyze",
+    "analyse",
+    "current",
+    "explain",
+    "flow",
+    "from",
+    "into",
+    "with",
+}
+
+
+def _candidate_records(task: str, root: Path, max_candidates: int) -> List[SourceFileRecord]:
+    """Use deterministic search to collect and rank candidates for an LLM prompt."""
+    records = discover_source_files(root)
+    records_by_path = {str(record.path): record for record in records}
+    queries = [task.strip()]
+    seen_queries = {task.strip().casefold()}
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", task):
+        folded_token = token.casefold()
+        if len(token) >= 3 and folded_token not in _SEARCH_STOP_WORDS:
+            if folded_token not in seen_queries:
+                queries.append(token)
+                seen_queries.add(folded_token)
+
+    candidate_scores: Dict[str, int] = {}
+    for query in queries:
+        for result in search_source(query, max_results=max_candidates, root=root):
+            path = str(result["path"])
+            record = records_by_path.get(path)
+            if record is None:
+                continue
+            score, _, _ = _rank_record(record, query)
+            candidate_scores[path] = candidate_scores.get(path, 0) + score
+
+    ranked_paths = sorted(
+        candidate_scores,
+        key=lambda path: (-candidate_scores[path], path.casefold()),
+    )
+    return [records_by_path[path] for path in ranked_paths[:max_candidates]]
+
+
+def _parse_selected_ids(content: str, valid_ids: set, max_files: int) -> List[int]:
+    """Accept only a whitespace-separated list of valid numeric manifest IDs."""
+    values = [line.strip() for line in content.splitlines() if line.strip()]
+    if not values or any(not re.fullmatch(r"\d+", value) for value in values):
+        return []
+
+    selected_ids = []
+    for value in values:
+        identifier = int(value)
+        if identifier not in valid_ids or identifier in selected_ids:
+            continue
+        selected_ids.append(identifier)
+        if len(selected_ids) == max_files:
+            break
+    return selected_ids
+
+
+def select_source_with_llm(task: str, max_files: int = 3, root: Path = PROJECT_ROOT) -> Dict[str, object]:
+    """Ask Qwen to select complete C# files from a deterministic candidate manifest."""
+    max_files = min(max_files, 3)
+    if not task.strip() or max_files <= 0:
+        return {"selected_paths": [], "source_texts": {}}
+
+    records = discover_source_files(root)
+    manifest = [
+        {
+            "id": index,
+            "relative_path": str(record.path.relative_to(root)).replace("\\", "/"),
+            "classes": list(record.classes),
+            "methods": list(record.methods),
+        }
+        for index, record in enumerate(records, start=1)
+    ]
+    records_by_id = {entry["id"]: record for entry, record in zip(manifest, records)}
+    candidates = _candidate_records(task, root, max(max_files * 3, 8))
+    candidate_paths = {
+        str(record.path.relative_to(root)).replace("\\", "/")
+        for record in candidates
+    }
+    candidate_manifest = [
+        entry
+        for entry in manifest
+        if entry["relative_path"] in candidate_paths
+    ]
+    if not candidate_manifest:
+        return {"selected_paths": [], "source_texts": {}}
+
+    from llm import llm
+
+    prompt = (
+        "Select up to {max_files} C# files relevant to this task.\n"
+        "Return only numeric file ids, one id per line. Do not return any other text.\n\n"
+        "Task:\n{task}\n\n"
+        "Candidate source manifest:\n{manifest}"
+    ).format(
+        max_files=max_files,
+        task=task.strip(),
+        manifest=json.dumps(candidate_manifest, ensure_ascii=False, separators=(",", ":")),
+    )
+    response = llm.invoke(prompt)
+    valid_ids = {int(entry["id"]) for entry in candidate_manifest}
+    selected_ids = _parse_selected_ids(str(response.content), valid_ids, max_files)
+
+    selected_paths = []
+    source_texts = {}
+    for identifier in selected_ids:
+        record = records_by_id[identifier]
+        path = str(record.path)
+        selected_paths.append(path)
+        source_texts[path] = record.text
+
+    return {"selected_paths": selected_paths, "source_texts": source_texts}

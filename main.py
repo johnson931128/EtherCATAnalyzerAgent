@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from graph import graph
-from source_retrieval import search_source
+from source_retrieval import search_source, select_source_with_llm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -12,6 +12,7 @@ RESULT_PATH = PROJECT_ROOT / "result.md"
 HELP_TEXT = """Commands:
   /read task.md  Read the project task.md and run it through the Agent
   /source QUERY  Search C# source files without invoking the Agent graph
+  /source-ai TASK  Ask Qwen to select relevant C# source files
   /help          Show this help
   /exit          Exit the Agent
 
@@ -89,6 +90,13 @@ def print_source_results(query):
         print(f"   Match: {result['reason']}")
 
 
+def print_source_ai_results(task):
+    """Print only Qwen's selected source paths."""
+    result = select_source_with_llm(task)
+    for path in result["selected_paths"]:
+        print(path)
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -109,6 +117,16 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command.startswith("/source-ai"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/source-ai":
+                print("Usage: /source-ai <task>")
+                continue
+            try:
+                print_source_ai_results(parts[1].strip())
+            except Exception as exc:
+                print(f"Source selection failed: {exc}")
             continue
         if command.startswith("/source"):
             parts = user_input.split(maxsplit=1)
