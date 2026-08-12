@@ -38,6 +38,14 @@ def _field_name_matches(key: str, path: Sequence[str], field_name: str) -> bool:
     )
 
 
+def _packet_layers(packet: Dict[str, Any]) -> Dict[str, Any]:
+    source = packet.get("_source")
+    if not isinstance(source, dict):
+        return {}
+    layers = source.get("layers")
+    return layers if isinstance(layers, dict) else {}
+
+
 def _find_field_values(
     value: Any, field_names: Sequence[str], path: Sequence[str] = ()
 ) -> List[Any]:
@@ -61,7 +69,7 @@ def find_first_packet_with_any_field(
     """Return the first raw packet containing any requested field name."""
     document = json.loads(Path(json_path).read_text(encoding="utf-8"))
     for packet in _iter_packets(document):
-        if _find_field_values(packet, field_names):
+        if _find_field_values(_packet_layers(packet), field_names):
             return packet
     return None
 
@@ -72,21 +80,14 @@ def _first_field_value(value: Any, field_names: Sequence[str]) -> Any:
 
 
 def _iter_datagrams(ecat_layer: Any) -> Iterable[Dict[str, Any]]:
-    if isinstance(ecat_layer, list):
-        for item in ecat_layer:
-            yield from _iter_datagrams(item)
-        return
-
     if not isinstance(ecat_layer, dict):
         return
 
-    if any(str(key) == "ecat.cmd" for key in ecat_layer):
-        yield ecat_layer
-        return
-
-    for child in ecat_layer.values():
-        if isinstance(child, (dict, list)):
-            yield from _iter_datagrams(child)
+    for name, datagram in ecat_layer.items():
+        if str(name).startswith("EtherCAT datagram:") and isinstance(
+            datagram, dict
+        ):
+            yield datagram
 
 
 def _extract_datagram(datagram: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,8 +98,12 @@ def _extract_datagram(datagram: Dict[str, Any]) -> Dict[str, Any]:
         "Data Length": ("ecat.subframe.length",),
         "WKC": ("ecat.cnt",),
     }
+    header = datagram.get("Header")
+    if not isinstance(header, (dict, list)):
+        header = {}
+
     return {
-        label: _first_field_value(datagram, names)
+        label: _first_field_value(header if label != "WKC" else datagram, names)
         for label, names in datagram_fields.items()
     }
 
@@ -107,21 +112,22 @@ def find_first_coe_sdo_packet(json_path: Path) -> Optional[Dict[str, Any]]:
     """Find and extract the first packet containing a CoE SDO field."""
     document = json.loads(Path(json_path).read_text(encoding="utf-8"))
     for packet in _iter_packets(document):
-        for ecat_layer in _find_field_values(packet, ("ecat",)):
-            for datagram in _iter_datagrams(ecat_layer):
-                if not _find_field_values(datagram, COE_SDO_FIELDS):
-                    continue
+        layers = _packet_layers(packet)
+        ecat_layer = layers.get("ecat")
+        for datagram in _iter_datagrams(ecat_layer):
+            if not _find_field_values(datagram, COE_SDO_FIELDS):
+                continue
 
-                return {
-                    "frame_number": _first_field_value(
-                        packet, ("frame.number", "Frame Number")
-                    ),
-                    "ecat_mailbox": _first_field_value(
-                        datagram, ("ecat_mailbox",)
-                    ),
-                    "coe_tree": _first_field_value(
-                        datagram, ("ecat_mailbox.coe_tree", "coe_tree")
-                    ),
-                    "datagram": _extract_datagram(datagram),
-                }
+            return {
+                "frame_number": _first_field_value(
+                    layers, ("frame.number", "Frame Number")
+                ),
+                "ecat_mailbox": _first_field_value(
+                    datagram, ("ecat_mailbox",)
+                ),
+                "coe_tree": _first_field_value(
+                    datagram, ("ecat_mailbox.coe_tree",)
+                ),
+                "datagram": _extract_datagram(datagram),
+            }
     return None
