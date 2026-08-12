@@ -14,6 +14,7 @@ from state import AgentState
 
 
 MAX_TOOL_CALLS = 3
+MAX_AGENT_TURNS = 6
 MAX_QUERY_LENGTH = 200
 _SPEC_STOP_WORDS = {
     "about",
@@ -67,7 +68,10 @@ To finish:
 
 Tool results are compact retrieval evidence, not permission to invent missing details.
 Prefer specific queries. Distinguish source behavior from specification facts and capture
-observations, and state when evidence is insufficient. Do not reveal hidden reasoning."""
+observations. In the final answer, distinguish directly retrieved specification evidence
+from inference, do not invent protocol mechanisms unsupported by retrieved evidence, and
+do not generalize a command-specific table rule into a simpler universal rule. State
+explicitly when the available evidence is insufficient. Do not reveal hidden reasoning."""
 
 
 def _validated_query(arguments: Any) -> str:
@@ -215,6 +219,25 @@ def _tool_result(name: str, arguments: Any) -> str:
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
+def _tool_call_key(name: str, arguments: Any):
+    if name in {"search_source", "search_spec"}:
+        query = _validated_query(arguments)
+        return name, " ".join(query.split()).casefold()
+    if name == "find_first_coe_sdo":
+        return name, json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+    return name, json.dumps(arguments, sort_keys=True, default=str)
+
+
+def _tool_display(name: str, arguments: Any) -> str:
+    if name == "find_first_coe_sdo":
+        return "find_first_coe_sdo()"
+    try:
+        query = _validated_query(arguments)
+    except (TypeError, ValueError):
+        return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+    return f'{name}("{" ".join(query.split())}")'
+
+
 def _message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -269,10 +292,13 @@ def run_engineering_tool_agent(state: AgentState):
     """Run Qwen with at most MAX_TOOL_CALLS deterministic tool executions."""
     tools_used: List[str] = []
     evidence: List[str] = []
+    cached_results: Dict[object, str] = {}
     tool_call_count = 0
+    agent_turn_count = 0
     prompt = _agent_prompt(state["task"], evidence)
 
-    while tool_call_count < MAX_TOOL_CALLS:
+    while tool_call_count < MAX_TOOL_CALLS and agent_turn_count < MAX_AGENT_TURNS:
+        agent_turn_count += 1
         response = llm.invoke(prompt)
         try:
             action = _parse_action(response.content)
@@ -290,10 +316,24 @@ def run_engineering_tool_agent(state: AgentState):
             }
 
         name = action["tool"]
-        tool_call_count += 1
-        tools_used.append(name)
-        result = _tool_result(name, action["arguments"])
-        evidence.append(f"Tool: {name}\nResult: {result}")
+        arguments = action["arguments"]
+        display = _tool_display(name, arguments)
+        try:
+            call_key = _tool_call_key(name, arguments)
+        except (TypeError, ValueError):
+            call_key = None
+
+        if call_key is not None and call_key in cached_results:
+            result = cached_results[call_key]
+            tools_used.append(f"{display} [reused]")
+        else:
+            tool_call_count += 1
+            tools_used.append(display)
+            result = _tool_result(name, arguments)
+            if call_key is not None:
+                cached_results[call_key] = result
+
+        evidence.append(f"Tool: {display}\nResult: {result}")
         prompt = _agent_prompt(
             state["task"], evidence, force_final=tool_call_count >= MAX_TOOL_CALLS
         )
@@ -301,7 +341,7 @@ def run_engineering_tool_agent(state: AgentState):
         if tool_call_count >= MAX_TOOL_CALLS:
             break
 
-    final_response = llm.invoke(prompt)
+    final_response = llm.invoke(_agent_prompt(state["task"], evidence, force_final=True))
     try:
         final_action = _parse_action(final_response.content)
         if final_action["action"] != "final":
