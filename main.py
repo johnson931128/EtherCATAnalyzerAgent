@@ -1,8 +1,11 @@
 import argparse
+import json
 from pathlib import Path
 
+from config import RAW_TSHARK_PATH
 from graph import graph
 from pdf_spec import search_pdf
+from raw_capture import find_first_coe_sdo_packet
 from spec_retrieval import plan_spec_queries, select_spec_with_llm
 from source_retrieval import search_source, select_source_with_llm
 
@@ -18,6 +21,7 @@ HELP_TEXT = """Commands:
   /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
   /spec-ai TASK   Ask Qwen to select relevant ET1100 PDF pages
   /spec-plan TASK Ask Qwen to plan ET1100 specification queries
+  /raw-coe-sdo    Find the first raw CoE SDO packet
   /help          Show this help
   /exit          Exit the Agent
 
@@ -143,6 +147,27 @@ def print_spec_plan_results(task):
         print(f"\n{index}. {query}")
 
 
+def print_raw_coe_sdo_result():
+    """Print only the first raw CoE SDO packet match."""
+    result = find_first_coe_sdo_packet(RAW_TSHARK_PATH)
+    if result is None:
+        print("No CoE SDO packet found.")
+        return
+
+    datagram = result["datagram"]
+    print(f"Frame Number: {result['frame_number']}")
+    print("\necat_mailbox:")
+    print(json.dumps(result["ecat_mailbox"], ensure_ascii=False, indent=2))
+    print("\necat_mailbox.coe_tree:")
+    print(json.dumps(result["coe_tree"], ensure_ascii=False, indent=2))
+    print("\nEtherCAT Datagram:")
+    print(f"Command: {datagram['Command']}")
+    print(f"ADP: {datagram['ADP']}")
+    print(f"ADO: {datagram['ADO']}")
+    print(f"Data Length: {datagram['Data Length']}")
+    print(f"WKC: {datagram['WKC']}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -163,6 +188,12 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command == "/raw-coe-sdo":
+            try:
+                print_raw_coe_sdo_result()
+            except Exception as exc:
+                print(f"Raw CoE SDO search failed: {exc}")
             continue
         if command.startswith("/spec-plan"):
             parts = user_input.split(maxsplit=1)
