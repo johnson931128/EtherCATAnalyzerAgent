@@ -1,12 +1,54 @@
+from pathlib import Path
+
 from config import DOCS_READ_PATH
 from llm import llm
 from state import AgentState
 
 
+MAX_SELECTED_DOCS = 2
+
+
+def _markdown_documents():
+    root = DOCS_READ_PATH.resolve()
+    return sorted(
+        (
+            path.relative_to(root).as_posix(),
+            path,
+        )
+        for path in root.rglob("*.md")
+        if path.is_file()
+    )
+
+
+def _safe_document_path(identifier):
+    if not isinstance(identifier, str):
+        return None
+
+    identifier = identifier.strip().strip("`").replace("\\", "/")
+    identifier = identifier.lstrip("-* ").strip()
+    if not identifier or Path(identifier).is_absolute():
+        return None
+
+    relative_path = Path(identifier)
+    if ".." in relative_path.parts:
+        return None
+
+    root = DOCS_READ_PATH.resolve()
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+
+    if candidate.suffix.casefold() != ".md" or not candidate.is_file():
+        return None
+    return candidate
+
+
 def load_docs_index(state: AgentState):
     entries = []
 
-    for path in sorted(DOCS_READ_PATH.glob("*.md")):
+    for relative_path, path in _markdown_documents():
         headings = []
 
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -15,7 +57,7 @@ def load_docs_index(state: AgentState):
             if stripped.startswith("#"):
                 headings.append(stripped)
 
-        entry = path.name
+        entry = relative_path
 
         if headings:
             entry += "\n" + "\n".join(f"  {heading}" for heading in headings)
@@ -27,6 +69,9 @@ def load_docs_index(state: AgentState):
 
 def select_docs(state: AgentState):
     prompt = f"""
+Select at most {MAX_SELECTED_DOCS} documents. Return only their relative Markdown paths from docs/read,
+one per line, such as notes/EtherCAT_EEPROM.md. Return NONE when no document is relevant.
+
 任務：
 
 {state["task"]}
@@ -52,24 +97,22 @@ def load_selected_docs(state: AgentState):
     if state["selected_docs"].strip().upper() == "NONE":
         return {"docs_content": ""}
 
-    available_docs = {
-        path.name: path
-        for path in DOCS_READ_PATH.glob("*.md")
-    }
-
     contents = []
 
     for line in state["selected_docs"].splitlines():
-        file_name = line.strip()
-        file_name = file_name.strip("`")
-        file_name = file_name.lstrip("-* ").strip()
+        if len(contents) >= MAX_SELECTED_DOCS:
+            break
 
-        path = available_docs.get(file_name)
+        document_id = line.strip()
+        document_id = document_id.strip("`")
+        document_id = document_id.lstrip("-* ").strip()
+        path = _safe_document_path(document_id)
 
         if path is None:
             continue
 
         content = path.read_text(encoding="utf-8")
-        contents.append(f"===== {file_name} =====\n{content}")
+        relative_path = path.relative_to(DOCS_READ_PATH.resolve()).as_posix()
+        contents.append(f"===== {relative_path} =====\n{content}")
 
     return {"docs_content": "\n\n".join(contents)}
