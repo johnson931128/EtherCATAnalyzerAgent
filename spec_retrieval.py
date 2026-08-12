@@ -59,6 +59,46 @@ def _extract_search_terms(task: str) -> List[str]:
     return _unique_terms(hex_values + phrases + words)
 
 
+def _parse_planned_queries(content: str, max_queries: int) -> List[str]:
+    queries = []
+    seen = set()
+    for line in content.splitlines():
+        query = re.sub(r"^(?:[-*]|\d+[.)])\s*", "", line.strip())
+        query = " ".join(query.split())
+        if not query:
+            continue
+        folded = query.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        queries.append(query)
+        if len(queries) == max_queries:
+            break
+    return queries
+
+
+def plan_spec_queries(task: str, max_queries: int = 5) -> List[str]:
+    """Ask Qwen to turn an engineering task into ET1100 fact queries."""
+    max_queries = min(max_queries, 5)
+    if not task.strip() or max_queries <= 0:
+        return []
+
+    prompt = (
+        "Convert this engineering task into at most {max_queries} short technical "
+        "ET1100 specification search queries.\n"
+        "Identify the protocol or specification facts that must be verified to answer "
+        "the task. Prefer ET1100 terminology and preserve explicit register addresses "
+        "such as 0x0502, 0x0504, and 0x0508 exactly.\n"
+        "Queries must describe specification facts, not implementation questions.\n"
+        "Avoid generic queries such as EtherCAT, EEPROM, behavior, implementation, or "
+        "reconstruction. Do not answer the task, select PDF pages, or search the PDF.\n"
+        "Return only one query per line with no numbering, bullets, or explanation.\n\n"
+        "Task:\n{task}"
+    ).format(max_queries=max_queries, task=task.strip())
+    response = llm.invoke(prompt)
+    return _parse_planned_queries(str(response.content), max_queries)
+
+
 def _parse_selected_pages(content: str, valid_pages: set, max_pages: int) -> List[int]:
     selected_pages = []
     values = [line.strip() for line in content.splitlines() if line.strip()]

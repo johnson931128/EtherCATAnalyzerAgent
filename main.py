@@ -3,7 +3,7 @@ from pathlib import Path
 
 from graph import graph
 from pdf_spec import search_pdf
-from spec_retrieval import select_spec_with_llm
+from spec_retrieval import plan_spec_queries, select_spec_with_llm
 from source_retrieval import search_source, select_source_with_llm
 
 
@@ -17,6 +17,7 @@ HELP_TEXT = """Commands:
   /source-ai TASK  Ask Qwen to select relevant C# source files
   /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
   /spec-ai TASK   Ask Qwen to select relevant ET1100 PDF pages
+  /spec-plan TASK Ask Qwen to plan ET1100 specification queries
   /help          Show this help
   /exit          Exit the Agent
 
@@ -134,6 +135,14 @@ def print_spec_ai_results(task):
         print(f"   Excerpt: {excerpt}")
 
 
+def print_spec_plan_results(task):
+    """Print Qwen's ET1100 specification queries."""
+    queries = plan_spec_queries(task)
+    print("Spec queries:")
+    for index, query in enumerate(queries, start=1):
+        print(f"\n{index}. {query}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -154,6 +163,16 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command.startswith("/spec-plan"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/spec-plan":
+                print("Usage: /spec-plan <task>")
+                continue
+            try:
+                print_spec_plan_results(parts[1].strip())
+            except Exception as exc:
+                print(f"Spec planning failed: {exc}")
             continue
         if command.startswith("/spec-ai"):
             parts = user_input.split(maxsplit=1)
