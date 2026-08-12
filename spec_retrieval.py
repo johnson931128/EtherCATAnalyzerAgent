@@ -75,9 +75,9 @@ def _parse_selected_pages(content: str, valid_pages: set, max_pages: int) -> Lis
     return selected_pages
 
 
-def select_spec_with_llm(task: str, max_pages: int = 5) -> Dict[str, object]:
+def select_spec_with_llm(task: str, max_pages: int = 3) -> Dict[str, object]:
     """Search candidate ET1100 pages and ask Qwen to select relevant pages."""
-    max_pages = min(max_pages, 5)
+    max_pages = min(max_pages, 3)
     if not task.strip() or max_pages <= 0:
         return {"selected_pages": [], "page_texts": {}}
 
@@ -109,7 +109,16 @@ def select_spec_with_llm(task: str, max_pages: int = 5) -> Dict[str, object]:
             return {"selected_pages": [], "page_texts": {}}
 
         prompt = (
-            "Select up to {max_pages} relevant ET1100 PDF pages for this task.\n"
+            "Select the smallest set of ET1100 PDF pages necessary to answer this task, "
+            "using at most {max_pages} pages.\n"
+            "Select pages that directly support the requested technical answer, not merely "
+            "pages related to the topic.\n"
+            "Prioritize protocol definitions, behavioral rules, register definitions, and "
+            "directly relevant tables or procedures.\n"
+            "Normally avoid document history, table of contents, list of tables or figures, "
+            "glossary, general chapter introductions, address-space overview, and register "
+            "availability tables unless the task specifically requires them.\n"
+            "If one page is sufficient, return only one page.\n"
             "Return only PDF page numbers, one per line. Do not return any other text.\n\n"
             "Task:\n{task}\n\n"
             "Candidate page manifest:\n{manifest}"
