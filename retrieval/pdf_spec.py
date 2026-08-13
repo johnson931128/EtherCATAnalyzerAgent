@@ -10,7 +10,53 @@ from typing import Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 
-from core.config import ET1100_SPEC_PATH
+from core.config import SPEC_ORIGINAL_ROOT
+
+
+def resolve_spec_pdf(
+    spec_name: str,
+    original_root: Optional[Path] = None,
+) -> Path:
+    """Resolve exactly one PDF from a repository specification directory."""
+    if not isinstance(spec_name, str) or not spec_name.strip():
+        raise ValueError("Specification name must be a non-empty directory name")
+
+    normalized_name = spec_name.strip()
+    relative_name = Path(normalized_name)
+    if (
+        relative_name.is_absolute()
+        or len(relative_name.parts) != 1
+        or relative_name.parts[0] in {".", ".."}
+    ):
+        raise ValueError("Specification name must be a single directory name")
+
+    root = Path(original_root) if original_root is not None else SPEC_ORIGINAL_ROOT
+    spec_directory = root / normalized_name
+    if not spec_directory.is_dir():
+        raise FileNotFoundError(
+            f"Specification directory not found: {spec_directory}"
+        )
+
+    pdf_paths = sorted(
+        (
+            path
+            for path in spec_directory.iterdir()
+            if path.is_file() and path.suffix.casefold() == ".pdf"
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+    if not pdf_paths:
+        raise FileNotFoundError(
+            f"No PDF found in specification directory: {spec_directory}"
+        )
+    if len(pdf_paths) > 1:
+        names = ", ".join(path.name for path in pdf_paths)
+        raise RuntimeError(
+            "Ambiguous specification source: expected exactly one PDF in "
+            f"{spec_directory}, found {len(pdf_paths)} ({names})"
+        )
+
+    return pdf_paths[0]
 
 
 class PDFSpecExtractor:
@@ -21,9 +67,14 @@ class PDFSpecExtractor:
         Initialize the extractor with the PDF path.
 
         Args:
-            pdf_path: Path to the PDF file. Defaults to ET1100_SPEC_PATH from config.
+            pdf_path: Path to the PDF file. Defaults to the single PDF in
+                spec/original/ET1100/.
         """
-        self.pdf_path = Path(pdf_path) if pdf_path is not None else ET1100_SPEC_PATH
+        self.pdf_path = (
+            Path(pdf_path)
+            if pdf_path is not None
+            else resolve_spec_pdf("ET1100")
+        )
         self._doc: Optional[fitz.Document] = None
         self._pages: List[Dict[str, object]] = []
         self._extraction_failures: List[Dict[str, object]] = []
@@ -264,7 +315,7 @@ if __name__ == "__main__":
         "Working Counter"
     ]
 
-    print(f"PDF Path: {ET1100_SPEC_PATH}")
+    print(f"PDF Path: {resolve_spec_pdf('ET1100')}")
     print()
 
     with PDFSpecExtractor() as extractor:

@@ -1,4 +1,4 @@
-from core.config import ET1100_SPEC_PATH
+from core.config import SPEC_ORIGINAL_ROOT
 from core.llm import llm
 from core.state import AgentState
 
@@ -19,9 +19,9 @@ docs/read 是整理過的參考資料，不代表完整 EtherCAT protocol specif
 如果 docs/read 沒有足夠資訊支持 protocol fact，不得使用一般模型知識補完。
 應明確說明需要查完整 ET1100 specification。
 
-完整 ET1100 specification 路徑為：
+完整 ET1100 specification 目錄為：
 
-{ET1100_SPEC_PATH}
+{SPEC_ORIGINAL_ROOT / "ET1100"}
 
 目前尚未把完整 PDF evidence 接入這個 Graph，因此不能假裝已經查過完整 ET1100 specification。
 

@@ -3,7 +3,9 @@
 - `original/` contains local original specification files.
 - `generated/` contains raw generated Markdown derived from specifications.
 
-Both directories may be used locally by the Agent. Original PDFs and raw generated Markdown are intentionally excluded from Git; the directory placeholders and this metadata file remain tracked.
+Both directories may be used locally by the Agent. Original PDFs, raw generated Markdown, and generated manifests are intentionally excluded from Git; the directory placeholders and this metadata file remain tracked.
+
+The first supported ingestion command is `/ingest-spec ET1100`. It resolves the single PDF in `original/ET1100/` and writes page-level raw Markdown plus `manifest.json` under `generated/ET1100/`. Ingestion is deterministic, uses PyMuPDF, and does not call an LLM.
 
 Curated engineering knowledge belongs in the shared EtherCATAnalyzer `docs/read` knowledge base rather than in this staging area.
 

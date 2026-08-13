@@ -8,6 +8,7 @@ from retrieval.pdf_spec import search_pdf
 from retrieval.raw_capture import find_first_coe_sdo_packet
 from retrieval.source_retrieval import search_source, select_source_with_llm
 from retrieval.spec_retrieval import plan_spec_queries, select_spec_with_llm
+from workflows.spec_ingestion import ingest_spec
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,6 +22,7 @@ HELP_TEXT = """Commands:
   /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
   /spec-ai TASK   Ask Qwen to select relevant ET1100 PDF pages
   /spec-plan TASK Ask Qwen to plan ET1100 specification queries
+  /ingest-spec NAME  Convert the single local specification PDF to raw Markdown
   /raw-coe-sdo    Find the first raw CoE SDO packet
   /help          Show this help
   /exit          Exit the Agent
@@ -171,6 +173,21 @@ def print_raw_coe_sdo_result():
     print(f"WKC: {datagram['WKC']}")
 
 
+def print_spec_ingest_result(spec_name):
+    """Run deterministic PDF-to-Markdown ingestion for one specification."""
+    manifest = ingest_spec(spec_name)
+    print(f"Ingested specification: {manifest['spec']}")
+    print(f"Source PDF: {manifest['source_relative_path']}")
+    print(
+        "Generated pages: "
+        f"{manifest['successfully_generated_page_count']} / "
+        f"{manifest['total_pdf_pages']}"
+    )
+    print(f"Manifest: {manifest['generated_manifest_relative_path']}")
+    if manifest["extraction_failures"]:
+        print(f"Extraction failures: {len(manifest['extraction_failures'])}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
@@ -197,6 +214,16 @@ def interactive_cli():
                 print_raw_coe_sdo_result()
             except Exception as exc:
                 print(f"Raw CoE SDO search failed: {exc}")
+            continue
+        if command.startswith("/ingest-spec"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/ingest-spec":
+                print("Usage: /ingest-spec <spec-name>")
+                continue
+            try:
+                print_spec_ingest_result(parts[1].strip())
+            except Exception as exc:
+                print(f"Spec ingestion failed: {exc}")
             continue
         if command.startswith("/spec-plan"):
             parts = user_input.split(maxsplit=1)

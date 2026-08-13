@@ -2,9 +2,9 @@
 
 from pathlib import Path
 import re
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from core.config import DOCS_READ_PATH, ET1100_SPEC_PATH, SOURCE_FILES
+from core.config import DOCS_READ_PATH, SOURCE_FILES
 from core.llm import llm
 from core.state import AgentState
 from retrieval.pdf_spec import PDFSpecExtractor
@@ -148,7 +148,7 @@ def _collect_topic_evidence(
     return sorted(ranked[:limit], key=lambda item: int(item["page_num"]))
 
 
-def collect_eeprom_evidence(pdf_path: Path = ET1100_SPEC_PATH) -> List[Evidence]:
+def collect_eeprom_evidence(pdf_path: Optional[Path] = None) -> List[Evidence]:
     """Collect a small, topic-ranked evidence set from the ET1100 PDF."""
     with PDFSpecExtractor(pdf_path) as extractor:
         extractor.extract_all_pages()

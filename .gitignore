@@ -37,3 +37,4 @@ temp/
 # Local specification assets
 spec/original/**/*.pdf
 spec/generated/**/*.md
+spec/generated/**/*.json
