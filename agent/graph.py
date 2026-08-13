@@ -1,14 +1,14 @@
 from langgraph.graph import END, START, StateGraph
 
-from analysis import analyze
-from build_docs import build_docs
-from capture import query_capture, select_capture_mode
-from context import load_context
-from docs import load_docs_index, load_selected_docs, select_docs
-from engineering_tool_agent import run_engineering_tool_agent
-from result_check import is_result_check_task, result_check
-from source import select_source
-from state import AgentState
+from agent.analysis import analyze
+from agent.engineering_tool_agent import run_engineering_tool_agent
+from core.context import load_context
+from core.state import AgentState
+from retrieval.capture import query_capture, select_capture_mode
+from retrieval.docs import load_docs_index, load_selected_docs, select_docs
+from retrieval.source import select_source
+from workflows.build_docs import build_docs
+from workflows.result_check import is_result_check_task, result_check
 
 
 def is_build_docs_task(task: str) -> bool:

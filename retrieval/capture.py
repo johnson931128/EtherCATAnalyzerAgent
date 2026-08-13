@@ -1,7 +1,7 @@
 import json
 
-from config import CAPTURE_PATH
-from state import AgentState
+from core.config import CAPTURE_PATH
+from core.state import AgentState
 
 
 def parse_number(value):

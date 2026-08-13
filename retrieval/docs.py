@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from config import DOCS_READ_PATH
-from llm import llm
-from state import AgentState
+from core.config import DOCS_READ_PATH
+from core.llm import llm
+from core.state import AgentState
 
 
 MAX_SELECTED_DOCS = 2

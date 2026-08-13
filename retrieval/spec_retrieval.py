@@ -4,8 +4,8 @@ import json
 import re
 from typing import Dict, List
 
-from llm import llm
-from pdf_spec import PDFSpecExtractor
+from core.llm import llm
+from retrieval.pdf_spec import PDFSpecExtractor
 
 
 _IGNORED_TERMS = {

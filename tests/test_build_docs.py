@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build_docs import (
+from workflows.build_docs import (
     _apply_grounded_eeprom_sections,
     validate_draft,
     write_validated_document,

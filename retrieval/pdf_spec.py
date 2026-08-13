@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 
-from config import ET1100_SPEC_PATH
+from core.config import ET1100_SPEC_PATH
 
 
 class PDFSpecExtractor:

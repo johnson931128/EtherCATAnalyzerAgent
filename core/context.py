@@ -1,5 +1,5 @@
-from config import AGENTS_PATH
-from state import AgentState
+from core.config import AGENTS_PATH
+from core.state import AgentState
 
 
 def load_context(state: AgentState):

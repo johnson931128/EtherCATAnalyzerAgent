@@ -4,10 +4,10 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from config import DOCS_READ_PATH, ET1100_SPEC_PATH, SOURCE_FILES
-from llm import llm
-from pdf_spec import PDFSpecExtractor
-from state import AgentState
+from core.config import DOCS_READ_PATH, ET1100_SPEC_PATH, SOURCE_FILES
+from core.llm import llm
+from core.state import AgentState
+from retrieval.pdf_spec import PDFSpecExtractor
 
 
 Evidence = Dict[str, object]

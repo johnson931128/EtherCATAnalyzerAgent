@@ -1,6 +1,6 @@
 import unittest
 
-from graph import route_task
+from agent.graph import route_task
 
 
 class TaskRoutingTests(unittest.TestCase):

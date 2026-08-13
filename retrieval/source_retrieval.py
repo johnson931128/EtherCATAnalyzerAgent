@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Dict, List, Sequence, Tuple
 
-from config import PROJECT_ROOT
+from core.config import PROJECT_ROOT
 
 
 IGNORED_DIRECTORIES = {".git", "bin", "obj"}

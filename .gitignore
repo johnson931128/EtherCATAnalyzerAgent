@@ -33,3 +33,7 @@ dist/
 # Runtime / temporary files
 tmp/
 temp/
+
+# Local specification assets
+spec/original/**/*.pdf
+spec/generated/**/*.md
