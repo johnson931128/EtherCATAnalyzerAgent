@@ -184,8 +184,7 @@ def print_spec_ingest_result(spec_name):
         f"{manifest['total_pdf_pages']}"
     )
     print(f"Manifest: {manifest['generated_manifest_relative_path']}")
-    if manifest["extraction_failures"]:
-        print(f"Extraction failures: {len(manifest['extraction_failures'])}")
+    print(f"Extraction failures: {len(manifest['extraction_failures'])}")
 
 
 def interactive_cli():
