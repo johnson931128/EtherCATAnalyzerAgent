@@ -22,7 +22,7 @@ HELP_TEXT = """Commands:
   /spec QUERY     Search the ET1100 PDF without invoking the Agent graph
   /spec-ai TASK   Ask Qwen to select relevant ET1100 PDF pages
   /spec-plan TASK Ask Qwen to plan ET1100 specification queries
-  /ingest-spec NAME  Convert the single local specification PDF to raw Markdown
+  /ingest-spec NAME  Convert the single local specification PDF with Docling
   /raw-coe-sdo    Find the first raw CoE SDO packet
   /help          Show this help
   /exit          Exit the Agent
@@ -174,17 +174,13 @@ def print_raw_coe_sdo_result():
 
 
 def print_spec_ingest_result(spec_name):
-    """Run deterministic PDF-to-Markdown ingestion for one specification."""
+    """Run Docling PDF-to-Markdown ingestion for one specification."""
     manifest = ingest_spec(spec_name)
     print(f"Ingested specification: {manifest['spec']}")
     print(f"Source PDF: {manifest['source_relative_path']}")
-    print(
-        "Generated pages: "
-        f"{manifest['successfully_generated_page_count']} / "
-        f"{manifest['total_pdf_pages']}"
-    )
-    print(f"Manifest: {manifest['generated_manifest_relative_path']}")
-    print(f"Extraction failures: {len(manifest['extraction_failures'])}")
+    print(f"Output Markdown: {manifest['output_relative_path']}")
+    print(f"Converter: {manifest['converter'].title()}")
+    print("Conversion completed.")
 
 
 def interactive_cli():

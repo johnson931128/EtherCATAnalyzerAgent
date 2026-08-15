@@ -1,12 +1,17 @@
+import json
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-import fitz
-
-from retrieval.pdf_spec import resolve_spec_pdf
-from workflows.spec_ingestion import ingest_spec
+from workflows.spec_ingestion import (
+    _build_pipeline_options,
+    _resolve_spec_pdf,
+    ingest_spec,
+)
 
 
 class SpecIngestionTests(unittest.TestCase):
@@ -20,22 +25,36 @@ class SpecIngestionTests(unittest.TestCase):
         (self.original_root / "ET1100").mkdir(parents=True)
         self.generated_root.mkdir(parents=True)
 
-    def _write_pdf(self, page_texts, filename="ET1100 v2.5.pdf"):
+    def _write_pdf(self, filename="ET1100 v2.5.pdf"):
         pdf_path = self.original_root / "ET1100" / filename
-        if pdf_path.exists():
-            pdf_path.unlink()
-
-        document = fitz.open()
-        document.set_metadata({"title": "Temporary ET1100 fixture"})
-        for text in page_texts:
-            page = document.new_page()
-            page.insert_text((72, 72), text)
-        document.save(str(pdf_path))
-        document.close()
+        pdf_path.write_bytes(b"%PDF-1.4\nmock fixture\n")
         return pdf_path
 
-    def _ingest(self):
-        with patch("workflows.spec_ingestion.REPOSITORY_ROOT", self.repository_root):
+    def _mock_converter(self, markdown="# ET1100\n\nReadable evidence\n"):
+        document = Mock()
+        document.export_to_markdown.return_value = markdown
+        document.origin.model_dump.return_value = {
+            "binary_hash": 12345,
+            "filename": "ET1100 v2.5.pdf",
+            "mimetype": "application/pdf",
+        }
+        converter = Mock()
+        converter.convert.return_value = SimpleNamespace(document=document)
+        return converter, document
+
+    def _ingest(self, converter=None):
+        if converter is None:
+            converter, _ = self._mock_converter()
+        with (
+            patch(
+                "workflows.spec_ingestion.REPOSITORY_ROOT",
+                self.repository_root,
+            ),
+            patch(
+                "workflows.spec_ingestion._create_converter",
+                return_value=converter,
+            ),
+        ):
             return ingest_spec(
                 "ET1100",
                 original_root=self.original_root,
@@ -44,131 +63,147 @@ class SpecIngestionTests(unittest.TestCase):
 
     def test_no_pdf_fails_for_resolution_and_ingestion(self):
         with self.assertRaises(FileNotFoundError):
-            resolve_spec_pdf("ET1100", self.original_root)
+            _resolve_spec_pdf("ET1100", self.original_root)
 
         with self.assertRaises(FileNotFoundError):
             self._ingest()
 
     def test_multiple_pdfs_fail_as_ambiguous_source(self):
-        self._write_pdf(["first"], filename="first.pdf")
-        self._write_pdf(["second"], filename="second.pdf")
+        self._write_pdf("first.pdf")
+        self._write_pdf("second.pdf")
 
         with self.assertRaisesRegex(RuntimeError, "Ambiguous specification source"):
-            resolve_spec_pdf("ET1100", self.original_root)
+            _resolve_spec_pdf("ET1100", self.original_root)
 
         with self.assertRaisesRegex(RuntimeError, "Ambiguous specification source"):
             self._ingest()
 
-    def test_single_pdf_creates_manifest_and_page_markdown(self):
-        source_pdf = self._write_pdf(["single page evidence"])
-
-        manifest = self._ingest()
-        output_directory = self.generated_root / "ET1100"
-        page_path = output_directory / "pages" / "page_001.md"
-
-        self.assertEqual(manifest["source_filename"], source_pdf.name)
-        self.assertTrue((output_directory / "manifest.json").is_file())
-        self.assertTrue(page_path.is_file())
-        self.assertEqual(manifest["generated_manifest_relative_path"],
-                         "spec/generated/ET1100/manifest.json")
-
-    def test_page_markdown_contains_required_metadata(self):
-        source_pdf = self._write_pdf(["metadata evidence"])
-
-        self._ingest()
-        page_text = (
-            self.generated_root / "ET1100" / "pages" / "page_001.md"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn(f"source: {source_pdf.name}", page_text)
-        self.assertIn("spec: ET1100", page_text)
-        self.assertIn("pdf_page: 1", page_text)
-        self.assertIn("# PDF Page 1", page_text)
-
-    def test_extracted_text_is_preserved_in_page_markdown(self):
-        evidence = "unique extracted ET1100 evidence"
-        self._write_pdf([evidence])
-
-        self._ingest()
-        page_text = (
-            self.generated_root / "ET1100" / "pages" / "page_001.md"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn(evidence, page_text)
-
-    def test_multi_page_output_is_ordered_and_one_based(self):
-        page_texts = ["first page evidence", "second page evidence", "third page evidence"]
-        self._write_pdf(page_texts)
-        manifest = self._ingest()
-        page_paths = sorted(
-            (self.generated_root / "ET1100" / "pages").glob("page_*.md")
-        )
+    def test_single_pdf_resolution(self):
+        source_pdf = self._write_pdf()
 
         self.assertEqual(
-            [path.name for path in page_paths],
-            ["page_001.md", "page_002.md", "page_003.md"],
+            _resolve_spec_pdf("ET1100", self.original_root),
+            source_pdf,
         )
-        self.assertEqual(manifest["total_pdf_pages"], 3)
-        for page_number, (page_path, evidence) in enumerate(
-            zip(page_paths, page_texts), start=1
-        ):
-            content = page_path.read_text(encoding="utf-8")
-            self.assertIn(f"pdf_page: {page_number}", content)
-            self.assertIn(evidence, content)
 
-    def test_reingestion_removes_stale_page_markdown(self):
-        source_pdf = self._write_pdf(["old page 1", "old page 2", "old page 3"])
-        self._ingest()
-        pages_directory = self.generated_root / "ET1100" / "pages"
-        self.assertTrue((pages_directory / "page_003.md").exists())
+    def test_single_pdf_creates_one_markdown_output(self):
+        source_pdf = self._write_pdf()
+        converter, document = self._mock_converter(
+            "## 7 FMMU\n\nReadable FMMU evidence\n"
+        )
 
-        self._write_pdf(["new page 1"], filename=source_pdf.name)
-        manifest = self._ingest()
+        manifest = self._ingest(converter)
+        output_path = self.generated_root / "ET1100" / "ET1100.md"
 
-        self.assertEqual(manifest["successfully_generated_page_count"], 1)
+        converter.convert.assert_called_once_with(source_pdf)
+        document.export_to_markdown.assert_called_once_with()
         self.assertEqual(
-            [path.name for path in pages_directory.glob("page_*.md")],
-            ["page_001.md"],
+            output_path.read_text(encoding="utf-8"),
+            "## 7 FMMU\n\nReadable FMMU evidence\n",
         )
-        self.assertFalse((pages_directory / "page_002.md").exists())
-        self.assertFalse((pages_directory / "page_003.md").exists())
+        self.assertEqual(
+            manifest["output_relative_path"],
+            "spec/generated/ET1100/ET1100.md",
+        )
 
-    def test_manifest_reports_page_counts_paths_failures_and_metadata(self):
-        self._write_pdf(["page one", "page two"])
+    def test_manifest_uses_docling_single_output_schema(self):
+        source_pdf = self._write_pdf()
 
         manifest = self._ingest()
+        manifest_path = self.generated_root / "ET1100" / "manifest.json"
+        persisted_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-        expected_keys = {
-            "spec",
-            "source_filename",
-            "source_relative_path",
-            "generated_output_relative_path",
-            "generated_manifest_relative_path",
-            "generated_pages_relative_paths",
-            "total_pdf_pages",
-            "successfully_generated_page_count",
-            "extraction_failures",
-            "document_metadata",
-        }
-        self.assertTrue(expected_keys.issubset(manifest))
+        self.assertEqual(manifest, persisted_manifest)
+        self.assertEqual(
+            set(manifest),
+            {
+                "spec",
+                "source_filename",
+                "source_relative_path",
+                "output_relative_path",
+                "manifest_relative_path",
+                "converter",
+                "conversion_status",
+                "document_metadata",
+            },
+        )
         self.assertEqual(manifest["spec"], "ET1100")
-        self.assertEqual(manifest["source_relative_path"],
-                         "spec/original/ET1100/ET1100 v2.5.pdf")
-        self.assertEqual(manifest["generated_output_relative_path"],
-                         "spec/generated/ET1100")
-        self.assertEqual(manifest["total_pdf_pages"], 2)
-        self.assertEqual(manifest["successfully_generated_page_count"], 2)
-        self.assertEqual(manifest["extraction_failures"], [])
+        self.assertEqual(manifest["source_filename"], source_pdf.name)
         self.assertEqual(
-            manifest["generated_pages_relative_paths"],
-            [
-                "spec/generated/ET1100/pages/page_001.md",
-                "spec/generated/ET1100/pages/page_002.md",
-            ],
+            manifest["source_relative_path"],
+            "spec/original/ET1100/ET1100 v2.5.pdf",
         )
+        self.assertEqual(manifest["converter"], "docling")
+        self.assertEqual(manifest["conversion_status"], "completed")
         self.assertEqual(
-            manifest["document_metadata"]["title"],
-            "Temporary ET1100 fixture",
+            manifest["document_metadata"],
+            {
+                "binary_hash": 12345,
+                "filename": "ET1100 v2.5.pdf",
+                "mimetype": "application/pdf",
+            },
+        )
+
+    def test_successful_ingestion_removes_stale_page_output(self):
+        self._write_pdf()
+        pages_directory = self.generated_root / "ET1100" / "pages"
+        pages_directory.mkdir(parents=True)
+        (pages_directory / "page_001.md").write_text("stale", encoding="utf-8")
+        (pages_directory / "page_999.md").write_text("stale", encoding="utf-8")
+
+        self._ingest()
+
+        self.assertFalse(pages_directory.exists())
+        self.assertTrue(
+            (self.generated_root / "ET1100" / "ET1100.md").is_file()
+        )
+
+    def test_docling_conversion_failure_is_reported_with_context(self):
+        source_pdf = self._write_pdf()
+        converter = Mock()
+        converter.convert.side_effect = ValueError("layout failed")
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            rf"Docling conversion failed for {re.escape(str(source_pdf))}.*layout failed",
+        ):
+            self._ingest(converter)
+
+    def test_pipeline_disables_ocr_and_compile(self):
+        with patch.dict(os.environ, {}, clear=True):
+            pipeline_options = _build_pipeline_options()
+
+        self.assertFalse(pipeline_options.do_ocr)
+        self.assertTrue(pipeline_options.do_table_structure)
+        self.assertFalse(
+            pipeline_options.layout_options.engine_options.compile_model
+        )
+        self.assertIsNone(pipeline_options.artifacts_path)
+
+    def test_pipeline_uses_local_artifacts_path_override(self):
+        artifacts_path = self.repository_root / "docling-models"
+        with patch.dict(
+            os.environ,
+            {"DOCLING_ARTIFACTS_PATH": str(artifacts_path)},
+        ):
+            pipeline_options = _build_pipeline_options()
+
+        self.assertEqual(pipeline_options.artifacts_path, artifacts_path)
+
+    def test_nested_list_artifact_is_normalized_without_other_cleanup(self):
+        self._write_pdf()
+        converter, _ = self._mock_converter(
+            "- Buffered mode\n- -The buffered mode preserves data.\n"
+        )
+
+        self._ingest(converter)
+        markdown = (
+            self.generated_root / "ET1100" / "ET1100.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            markdown,
+            "- Buffered mode\n  - The buffered mode preserves data.\n",
         )
 
 

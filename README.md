@@ -50,13 +50,11 @@ spec/
 ├── README.md
 ├── original/
 │   └── ET1100/
-│       └── ET1100_v2.5_2025-07-28.pdf
+│       └── ET1100_2025.pdf
 └── generated/
     └── ET1100/
-        ├── manifest.json
-        └── pages/
-            ├── page_001.md
-            └── ...
+        ├── ET1100.md
+        └── manifest.json
 ```
 
 The current local ET1100 source is Beckhoff EtherCAT Slave Controller documentation, version 2.5, dated 2025-07-28. The original PDF is a local ignored asset. `spec/generated/` is reserved for raw specification-derived Markdown and manifests and is also ignored. Curated engineering knowledge belongs in the shared external EtherCATAnalyzer `docs/read` knowledge base; neither raw PDF content nor raw generated Markdown is that curated knowledge.
@@ -67,7 +65,11 @@ The first deterministic ingestion workflow is `workflows/spec_ingestion.py`. Run
 /ingest-spec ET1100
 ```
 
-It requires exactly one PDF in `spec/original/ET1100/` and writes `manifest.json` plus `pages/page_001.md`, `pages/page_002.md`, and so on under `spec/generated/ET1100/`. The page files preserve extracted text and are raw evidence, not summaries or curated engineering notes. Generated Markdown and manifests are ignored by Git.
+It requires exactly one PDF in `spec/original/ET1100/` and uses Docling to write one readable `ET1100.md` plus `manifest.json` under `spec/generated/ET1100/`. Docling preserves document headings, paragraphs, lists, tables, and reading order without LLM cleanup. Generated Markdown and manifests are ignored by Git.
+
+## Python dependency
+
+This repository does not currently use a package manager or dependency lockfile. The runtime environment must provide `docling` in addition to the existing project dependencies. Docling model artifacts use its default resolution behavior unless `DOCLING_ARTIFACTS_PATH` points to a local pre-downloaded artifacts directory.
 
 ## CLI usage
 
@@ -90,6 +92,8 @@ SPEC_GENERATED_ROOT  = spec/generated/
 ```
 
 The existing ET1100 retrieval path resolves the single PDF in `spec/original/ET1100/`; no machine-specific absolute ET1100 PDF path is used. The external DLL project is not changed by this repository.
+
+Specification ingestion disables OCR for the text-layer ET1100 PDF and disables layout-model compilation for Windows compatibility. `DOCLING_ARTIFACTS_PATH`, when set, is passed to Docling without changing repository-relative specification input or output paths.
 
 ## Limitations and safety
 
