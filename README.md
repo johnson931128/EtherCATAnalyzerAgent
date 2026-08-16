@@ -12,7 +12,7 @@ The runtime is organized by function:
 
 - `agent/`: routing, analysis prompting, and the bounded Qwen tool-agent workflow;
 - `core/`: shared configuration, state shape, LLM client, and external context loading;
-- `retrieval/`: deterministic source, reference-document, ET1100 PDF, and raw-capture retrieval;
+- `retrieval/`: deterministic source, generated ET1100 Markdown, raw ET1100 PDF, reference-document, and raw-capture retrieval;
 - `workflows/`: ET1100 documentation generation, deterministic PDF ingestion, and Stage 3 result checking;
 - `tests/`: existing unit-test sources;
 - `scripts/`: maintenance PowerShell scripts;
@@ -61,6 +61,8 @@ Tool output is evidence, not permission to invent details. Answers should distin
 ## Retrieval roles
 
 - `retrieval/source_retrieval.py` discovers and searches external EtherCAT Analyzer C# source files; `retrieval/source.py` integrates source selection into the graph.
+- `retrieval/markdown_spec.py` loads and searches the generated ET1100 Markdown
+  with heading-aware deterministic chunks for primary `search_spec()` evidence.
 - `retrieval/pdf_spec.py` extracts and searches the local ET1100 PDF; its
   `search_spec_raw` and `get_spec_raw_pages` operations resolve exactly one PDF
   from `spec/original/<SPEC>/` and never read generated `ET1100.md`.
@@ -84,6 +86,21 @@ spec/
 
 The current local ET1100 source is Beckhoff EtherCAT Slave Controller documentation, version 2.5, dated 2025-07-28. The original PDF is a local ignored asset. `spec/generated/` is reserved for raw specification-derived Markdown and manifests and is also ignored. Curated engineering knowledge belongs in the shared external EtherCATAnalyzer `docs/read` knowledge base; neither raw PDF content nor raw generated Markdown is that curated knowledge.
 
+The specification retrieval flow is:
+
+```text
+ET1100 PDF
+  -> /ingest-spec ET1100 (Docling)
+  -> spec/generated/ET1100/ET1100.md
+  -> search_spec(query)
+  -> primary readable specification evidence
+```
+
+`retrieval/markdown_spec.py` reads `spec/generated/ET1100/ET1100.md` as UTF-8 and
+performs heading-aware deterministic chunking and ranking. If `ET1100.md` is
+missing, `search_spec()` reports that you must first run `/ingest-spec ET1100`;
+it never starts Docling or converts the PDF automatically.
+
 The first deterministic ingestion workflow is `workflows/spec_ingestion.py`. Run it from the CLI with:
 
 ```text
@@ -91,6 +108,10 @@ The first deterministic ingestion workflow is `workflows/spec_ingestion.py`. Run
 ```
 
 It requires exactly one PDF in `spec/original/ET1100/` and uses Docling to write one readable `ET1100.md` plus `manifest.json` under `spec/generated/ET1100/`. Docling preserves document headings, paragraphs, lists, tables, and reading order without LLM cleanup. Generated Markdown and manifests are ignored by Git.
+
+For fallback evidence, `search_spec_raw()` and `get_spec_raw_pages()` read the
+controlled original PDF directly through PyMuPDF. They do not replace the primary
+Markdown retrieval and are not automatically invoked when `ET1100.md` is missing.
 
 ## Python dependency
 
@@ -116,7 +137,10 @@ SPEC_ORIGINAL_ROOT   = spec/original/
 SPEC_GENERATED_ROOT  = spec/generated/
 ```
 
-The existing ET1100 retrieval path resolves the single PDF in `spec/original/ET1100/`; no machine-specific absolute ET1100 PDF path is used. The external DLL project is not changed by this repository.
+The primary ET1100 retrieval path reads `spec/generated/ET1100/ET1100.md`. Raw
+fallback retrieval resolves exactly one PDF in `spec/original/ET1100/`; no
+machine-specific absolute ET1100 PDF path is used. The external DLL project is not
+changed by this repository.
 
 Specification ingestion disables OCR for the text-layer ET1100 PDF and disables layout-model compilation for Windows compatibility. `DOCLING_ARTIFACTS_PATH`, when set, is passed to Docling without changing repository-relative specification input or output paths.
 
