@@ -32,14 +32,39 @@ Final responses use:
 {"action":"final","answer":"Concise engineering answer."}
 ```
 
-The allowed deterministic tools are `search_source(query)`, `search_spec(query)`, and `find_first_coe_sdo()`. The parser rejects unsupported actions, tools, and argument shapes. `MAX_TOOL_CALLS` is `3`; fresh deterministic calls consume the limit, equivalent cached calls are reused, and the agent is forced to finish after the limit. `MAX_AGENT_TURNS` remains `6` as a separate turn guard.
+The allowed deterministic tools are `search_source(query)`, `search_spec(query)`,
+`search_spec_raw(spec, query, limit)`, `get_spec_raw_pages(spec, pages)`, and
+`find_first_coe_sdo()`. The parser rejects unsupported actions, tools, unknown
+arguments, and invalid argument types. `MAX_TOOL_CALLS` is `3`; fresh deterministic
+calls consume the limit, equivalent cached calls are reused, and the agent is forced
+to finish after the limit. `MAX_AGENT_TURNS` remains `6` as a separate turn guard.
+
+`ET1100.md` is the primary readable specification source. The raw PDF tools are
+fallback/verification evidence only: use them for Docling markers such as
+`<!-- image -->` or `<!-- formula-not-decoded -->`, suspicious Markdown tables,
+questionable register addresses or bit values, or an explicit request for original
+PDF page evidence. Qwen may provide only the controlled `spec` value `ET1100`; it
+cannot provide a PDF path or execute Python, shell commands, or arbitrary tools.
+
+Raw tool requests use the following bounded JSON shapes:
+
+```json
+{"action":"tool","tool":"search_spec_raw","arguments":{"spec":"ET1100","query":"FMMU logical start bit","limit":5}}
+{"action":"tool","tool":"get_spec_raw_pages","arguments":{"spec":"ET1100","pages":[67,68]}}
+```
+
+Search `limit` is 1-10 (default 5 for the Python operation); page reads accept at
+most 5 unique positive physical page numbers and preserve the requested order.
 
 Tool output is evidence, not permission to invent details. Answers should distinguish implementation behavior, specification facts, capture observations, and inference.
 
 ## Retrieval roles
 
 - `retrieval/source_retrieval.py` discovers and searches external EtherCAT Analyzer C# source files; `retrieval/source.py` integrates source selection into the graph.
-- `retrieval/pdf_spec.py` extracts and searches the local ET1100 PDF; `retrieval/spec_retrieval.py` provides query planning and page selection helpers.
+- `retrieval/pdf_spec.py` extracts and searches the local ET1100 PDF; its
+  `search_spec_raw` and `get_spec_raw_pages` operations resolve exactly one PDF
+  from `spec/original/<SPEC>/` and never read generated `ET1100.md`.
+- `retrieval/spec_retrieval.py` provides query planning and page selection helpers.
 - `retrieval/raw_capture.py` reads TShark-derived JSON; `retrieval/capture.py` performs deterministic capture pairing and query modes.
 - `retrieval/docs.py` indexes and loads Markdown from the external shared `docs/read` knowledge base.
 

@@ -8,7 +8,14 @@ from typing import Any, Dict, List
 from core.config import RAW_TSHARK_PATH
 from core.llm import llm
 from core.state import AgentState
-from retrieval.pdf_spec import search_pdf
+from retrieval.pdf_spec import (
+    MAX_RAW_PAGE_COUNT,
+    MAX_RAW_SEARCH_LIMIT,
+    RAW_SPEC_NAME,
+    get_spec_raw_pages,
+    search_pdf,
+    search_spec_raw,
+)
 from retrieval.raw_capture import find_first_coe_sdo_packet
 from retrieval.source_retrieval import search_source
 
@@ -56,9 +63,17 @@ _SPEC_TECHNICAL_TERMS = (
 )
 
 _SYSTEM_PROMPT = """You are an engineering analysis agent for EtherCATAnalyzer.
+ET1100.md is the primary readable specification source. Use the raw PDF evidence tools
+only as a fallback or verification source when Docling output contains <!-- image -->,
+<!-- formula-not-decoded -->, a suspicious Markdown table, a questionable register
+address or bit value, or when the user explicitly requests original PDF page evidence.
+Do not request raw PDF evidence by default when the readable source is sufficient.
+
 Use only the following read-only tools when their evidence is needed:
 - search_source(query): deterministic C# source search
 - search_spec(query): deterministic ET1100 PDF search
+- search_spec_raw(spec, query, limit): bounded original ET1100 PDF page search
+- get_spec_raw_pages(spec, pages): bounded complete original PDF page text
 - find_first_coe_sdo(): first raw TShark CoE SDO match, with no arguments
 
 On every turn return exactly one JSON object and no markdown fences. To request a tool:
@@ -201,9 +216,63 @@ def _find_first_coe_sdo_tool(arguments: Any) -> Dict[str, object]:
     }
 
 
+def _validated_raw_search_arguments(arguments: Any):
+    if not isinstance(arguments, dict) or set(arguments) != {"spec", "query", "limit"}:
+        raise ValueError("search_spec_raw expects exactly: spec, query, limit")
+    spec = arguments["spec"]
+    if not isinstance(spec, str) or spec.strip() != RAW_SPEC_NAME:
+        raise ValueError(f"spec must be exactly '{RAW_SPEC_NAME}'")
+    query = _validated_query({"query": arguments["query"]})
+    limit = arguments["limit"]
+    if type(limit) is not int or not 1 <= limit <= MAX_RAW_SEARCH_LIMIT:
+        raise ValueError(
+            f"limit must be an integer between 1 and {MAX_RAW_SEARCH_LIMIT}"
+        )
+    return spec.strip(), query, limit
+
+
+def _validated_raw_pages_arguments(arguments: Any):
+    if not isinstance(arguments, dict) or set(arguments) != {"spec", "pages"}:
+        raise ValueError("get_spec_raw_pages expects exactly: spec, pages")
+    spec = arguments["spec"]
+    if not isinstance(spec, str) or spec.strip() != RAW_SPEC_NAME:
+        raise ValueError(f"spec must be exactly '{RAW_SPEC_NAME}'")
+    pages = arguments["pages"]
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("pages must be a non-empty list")
+    unique_pages = []
+    for page in pages:
+        if type(page) is not int or page <= 0:
+            raise ValueError("each page must be a positive integer")
+        if page not in unique_pages:
+            unique_pages.append(page)
+    if len(unique_pages) > MAX_RAW_PAGE_COUNT:
+        raise ValueError(
+            f"pages must contain at most {MAX_RAW_PAGE_COUNT} unique page numbers"
+        )
+    return spec.strip(), unique_pages
+
+
+def _search_spec_raw_tool(arguments: Any) -> Dict[str, object]:
+    spec, query, limit = _validated_raw_search_arguments(arguments)
+    return {
+        "query": query,
+        "matches": search_spec_raw(spec=spec, query=query, limit=limit),
+    }
+
+
+def _get_spec_raw_pages_tool(arguments: Any) -> Dict[str, object]:
+    spec, pages = _validated_raw_pages_arguments(arguments)
+    return {
+        "pages": get_spec_raw_pages(spec=spec, pages=pages),
+    }
+
+
 _TOOL_HANDLERS = {
     "search_source": _search_source_tool,
     "search_spec": _search_spec_tool,
+    "search_spec_raw": _search_spec_raw_tool,
+    "get_spec_raw_pages": _get_spec_raw_pages_tool,
     "find_first_coe_sdo": _find_first_coe_sdo_tool,
 }
 
@@ -223,6 +292,12 @@ def _tool_call_key(name: str, arguments: Any):
     if name in {"search_source", "search_spec"}:
         query = _validated_query(arguments)
         return name, " ".join(query.split()).casefold()
+    if name == "search_spec_raw":
+        spec, query, limit = _validated_raw_search_arguments(arguments)
+        return name, spec, " ".join(query.split()).casefold(), limit
+    if name == "get_spec_raw_pages":
+        spec, pages = _validated_raw_pages_arguments(arguments)
+        return name, spec, tuple(pages)
     if name == "find_first_coe_sdo":
         return name, json.dumps(arguments, sort_keys=True, separators=(",", ":"))
     return name, json.dumps(arguments, sort_keys=True, default=str)
@@ -231,6 +306,18 @@ def _tool_call_key(name: str, arguments: Any):
 def _tool_display(name: str, arguments: Any) -> str:
     if name == "find_first_coe_sdo":
         return "find_first_coe_sdo()"
+    if name == "search_spec_raw":
+        try:
+            spec, query, limit = _validated_raw_search_arguments(arguments)
+        except (TypeError, ValueError):
+            return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+        return f'{name}(spec="{spec}", query="{" ".join(query.split())}", limit={limit})'
+    if name == "get_spec_raw_pages":
+        try:
+            spec, pages = _validated_raw_pages_arguments(arguments)
+        except (TypeError, ValueError):
+            return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+        return f"{name}(spec=\"{spec}\", pages={pages})"
     try:
         query = _validated_query(arguments)
     except (TypeError, ValueError):
@@ -242,6 +329,23 @@ def _message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False)
+
+
+def _validate_tool_arguments(name: str, arguments: Any) -> None:
+    if name in {"search_source", "search_spec"}:
+        _validated_query(arguments)
+        return
+    if name == "search_spec_raw":
+        _validated_raw_search_arguments(arguments)
+        return
+    if name == "get_spec_raw_pages":
+        _validated_raw_pages_arguments(arguments)
+        return
+    if name == "find_first_coe_sdo":
+        if not isinstance(arguments, dict) or arguments:
+            raise ValueError("find_first_coe_sdo takes no arguments")
+        return
+    raise ValueError(f"Unsupported tool: {name}")
 
 
 def _parse_action(content: Any) -> Dict[str, Any]:
@@ -271,6 +375,7 @@ def _parse_action(content: Any) -> Dict[str, Any]:
         raise ValueError(f"Unsupported tool: {action['tool']}")
     if not isinstance(action["arguments"], dict):
         raise ValueError("Tool arguments must be a JSON object")
+    _validate_tool_arguments(action["tool"], action["arguments"])
     return action
 
 

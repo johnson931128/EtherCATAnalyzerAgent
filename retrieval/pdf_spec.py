@@ -5,12 +5,20 @@ Uses PyMuPDF (fitz) for deterministic PDF text extraction.
 """
 
 from pathlib import Path
+import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 
 from core.config import SPEC_ORIGINAL_ROOT
+
+
+RAW_SPEC_NAME = "ET1100"
+DEFAULT_RAW_SEARCH_LIMIT = 5
+MAX_RAW_SEARCH_LIMIT = 10
+MAX_RAW_PAGE_COUNT = 5
+MAX_RAW_QUERY_LENGTH = 200
 
 
 def resolve_spec_pdf(
@@ -292,6 +300,158 @@ def search_pdf(
     """
     with PDFSpecExtractor(pdf_path) as extractor:
         return extractor.search(keywords)
+
+
+def _validate_raw_spec(spec: str) -> str:
+    if not isinstance(spec, str) or not spec.strip():
+        raise ValueError("spec must be the string 'ET1100'")
+
+    normalized_spec = spec.strip()
+    if normalized_spec != RAW_SPEC_NAME:
+        raise ValueError(
+            f"Raw PDF evidence supports only spec='{RAW_SPEC_NAME}'"
+        )
+    return normalized_spec
+
+
+def _validate_raw_query(query: str) -> str:
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+
+    normalized_query = query.strip()
+    if len(normalized_query) > MAX_RAW_QUERY_LENGTH:
+        raise ValueError(
+            f"query must not exceed {MAX_RAW_QUERY_LENGTH} characters"
+        )
+    return normalized_query
+
+
+def _validate_raw_search_limit(limit: int) -> int:
+    if type(limit) is not int:
+        raise ValueError("limit must be an integer")
+    if not 1 <= limit <= MAX_RAW_SEARCH_LIMIT:
+        raise ValueError(
+            f"limit must be between 1 and {MAX_RAW_SEARCH_LIMIT}"
+        )
+    return limit
+
+
+def _raw_search_terms(query: str) -> List[str]:
+    tokens = re.findall(r"0x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9-]*", query)
+    words = [token for token in tokens if len(token) >= 3]
+    phrases = [f"{first} {second}" for first, second in zip(words, words[1:])]
+    terms = [query, *phrases, *words]
+    return list(dict.fromkeys(term.strip() for term in terms if term.strip()))
+
+
+def _raw_search_score(query: str, result: Dict[str, object]) -> int:
+    text = str(result.get("text", ""))
+    folded_text = text.casefold()
+    score = len(result.get("matches", [])) * 25
+    if query.casefold() in folded_text:
+        score += 100
+    if any(marker in folded_text for marker in ("register", "table", "section")):
+        score += 10
+    return score
+
+
+def search_spec_raw(
+    spec: str = RAW_SPEC_NAME,
+    query: str = "",
+    limit: int = DEFAULT_RAW_SEARCH_LIMIT,
+) -> List[Dict[str, object]]:
+    """Search the controlled raw specification PDF and return page evidence."""
+    normalized_spec = _validate_raw_spec(spec)
+    normalized_query = _validate_raw_query(query)
+    normalized_limit = _validate_raw_search_limit(limit)
+    pdf_path = resolve_spec_pdf(normalized_spec)
+    candidates = search_pdf(
+        _raw_search_terms(normalized_query),
+        pdf_path=pdf_path,
+    )
+    candidates = sorted(
+        candidates,
+        key=lambda result: (
+            -_raw_search_score(normalized_query, result),
+            int(result["page_num"]),
+        ),
+    )
+    return [
+        {
+            "spec": normalized_spec,
+            "source_filename": pdf_path.name,
+            "pdf_page": int(result["page_num"]),
+            "matched_terms": list(result["matches"]),
+            "excerpt": str(result["excerpt"]),
+        }
+        for result in candidates[:normalized_limit]
+    ]
+
+
+def _validate_raw_pages(pages: List[int]) -> List[int]:
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("pages must be a non-empty list")
+
+    unique_pages = []
+    for page in pages:
+        if type(page) is not int or page <= 0:
+            raise ValueError("each page must be a positive integer")
+        if page not in unique_pages:
+            unique_pages.append(page)
+
+    if len(unique_pages) > MAX_RAW_PAGE_COUNT:
+        raise ValueError(
+            f"pages must contain at most {MAX_RAW_PAGE_COUNT} unique page numbers"
+        )
+    return unique_pages
+
+
+def get_spec_raw_pages(
+    spec: str = RAW_SPEC_NAME,
+    pages: Optional[List[int]] = None,
+) -> List[Dict[str, object]]:
+    """Read complete extracted text from selected physical PDF pages."""
+    normalized_spec = _validate_raw_spec(spec)
+    normalized_pages = _validate_raw_pages(pages)
+    pdf_path = resolve_spec_pdf(normalized_spec)
+
+    extractor = PDFSpecExtractor(pdf_path)
+    try:
+        total_pages = extractor.open()
+        out_of_range = [page for page in normalized_pages if page > total_pages]
+        if out_of_range:
+            values = ", ".join(str(page) for page in out_of_range)
+            raise ValueError(
+                f"PDF page number out of range for {pdf_path.name}: {values}; "
+                f"valid range is 1-{total_pages}"
+            )
+
+        extracted_pages = extractor.extract_all_pages()
+        page_by_number = {
+            int(page["page_num"]): str(page["text"])
+            for page in extracted_pages
+        }
+        missing_pages = [
+            page_number
+            for page_number in normalized_pages
+            if page_number not in page_by_number
+        ]
+        if missing_pages:
+            values = ", ".join(str(page) for page in missing_pages)
+            raise RuntimeError(
+                f"Could not extract requested PDF pages: {values}"
+            )
+        return [
+            {
+                "spec": normalized_spec,
+                "source_filename": pdf_path.name,
+                "pdf_page": page_number,
+                "text": page_by_number[page_number],
+            }
+            for page_number in normalized_pages
+        ]
+    finally:
+        extractor.close()
 
 
 if __name__ == "__main__":
