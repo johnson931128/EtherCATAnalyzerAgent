@@ -34,10 +34,22 @@ Final responses use:
 
 The allowed deterministic tools are `search_source(query)`, `search_spec(query)`,
 `search_spec_raw(spec, query, limit)`, `get_spec_raw_pages(spec, pages)`, and
-`find_first_coe_sdo()`. The parser rejects unsupported actions, tools, unknown
+`query_capture(capture, display_filter, fields, limit)`,
+`export_frame_json(capture, frame_number)`, and `find_first_coe_sdo()`. The parser rejects unsupported actions, tools, unknown
 arguments, and invalid argument types. `MAX_TOOL_CALLS` is `3`; fresh deterministic
 calls consume the limit, equivalent cached calls are reused, and the agent is forced
 to finish after the limit. `MAX_AGENT_TURNS` remains `6` as a separate turn guard.
+
+Capture queries follow this bounded flow:
+
+```text
+Natural language -> Qwen -> structured capture tool -> Python validation -> TShark -> structured evidence
+```
+
+Qwen cannot provide arbitrary shell, PowerShell, Python, or TShark command strings.
+`query_capture` performs bounded candidate-frame discovery using an allowlisted field
+set. `export_frame_json` retrieves one frame with the canonical TShark protocol tree
+(`frame`, `eth`, `ecat`, and `ecat_mailbox`).
 
 `ET1100.md` is the primary readable specification source. The raw PDF tools are
 fallback/verification evidence only: use them for Docling markers such as
@@ -63,6 +75,8 @@ Tool output is evidence, not permission to invent details. Answers should distin
 - `retrieval/source_retrieval.py` discovers and searches external EtherCAT Analyzer C# source files; `retrieval/source.py` integrates source selection into the graph.
 - `retrieval/markdown_spec.py` loads and searches the generated ET1100 Markdown
   with heading-aware deterministic chunks for primary `search_spec()` evidence.
+- `retrieval/tshark_capture.py` resolves repository-local capture filenames and
+  provides the bounded `query_capture` and `export_frame_json` primitives.
 - `retrieval/pdf_spec.py` extracts and searches the local ET1100 PDF; its
   `search_spec_raw` and `get_spec_raw_pages` operations resolve exactly one PDF
   from `spec/original/<SPEC>/` and never read generated `ET1100.md`.
@@ -85,6 +99,11 @@ spec/
 ```
 
 The current local ET1100 source is Beckhoff EtherCAT Slave Controller documentation, version 2.5, dated 2025-07-28. The original PDF is a local ignored asset. `spec/generated/` is reserved for raw specification-derived Markdown and manifests and is also ignored. Curated engineering knowledge belongs in the shared external EtherCATAnalyzer `docs/read` knowledge base; neither raw PDF content nor raw generated Markdown is that curated knowledge.
+
+Capture inputs are logical filenames resolved only below the repository-relative
+`captures/` directory. Only `.pcap` and `.pcapng` files are accepted. Production
+captures, exported packet JSON, and temporary capture files remain ignored and are
+never part of the repository commit.
 
 The specification retrieval flow is:
 
@@ -135,12 +154,24 @@ The current CLI commands are `/help`, `/read task.md`, `/source`, `/source-ai`, 
 SPEC_ROOT            = spec/
 SPEC_ORIGINAL_ROOT   = spec/original/
 SPEC_GENERATED_ROOT  = spec/generated/
+CAPTURE_INPUT_ROOT   = captures/
 ```
 
 The primary ET1100 retrieval path reads `spec/generated/ET1100/ET1100.md`. Raw
 fallback retrieval resolves exactly one PDF in `spec/original/ET1100/`; no
 machine-specific absolute ET1100 PDF path is used. The external DLL project is not
 changed by this repository.
+
+`TSHARK_EXECUTABLE` may configure the TShark executable name or path; otherwise the
+bounded subprocess invocation uses `tshark`. The invocation always uses an argument
+list with `shell=False`. TShark display filters are length-limited, non-empty, and
+cannot contain NUL or newline characters; TShark itself validates filter syntax.
+
+`query_capture` returns raw frame-level field rows only. A frame may contain multiple
+EtherCAT datagrams, so its columns must not be interpreted as one semantic datagram
+record or used to pair a datagram header with another datagram's mailbox/WKC. Use
+`export_frame_json` when exact datagram association or the complete protocol tree is
+needed; its JSON is preserved for the existing `EtherCAT datagram:` boundary rules.
 
 Specification ingestion disables OCR for the text-layer ET1100 PDF and disables layout-model compilation for Windows compatibility. `DOCLING_ARTIFACTS_PATH`, when set, is passed to Docling without changing repository-relative specification input or output paths.
 

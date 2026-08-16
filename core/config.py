@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -5,6 +6,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SPEC_ROOT = REPOSITORY_ROOT / "spec"
 SPEC_ORIGINAL_ROOT = SPEC_ROOT / "original"
 SPEC_GENERATED_ROOT = SPEC_ROOT / "generated"
+CAPTURE_INPUT_ROOT = REPOSITORY_ROOT / "captures"
+TSHARK_EXECUTABLE = os.environ.get("TSHARK_EXECUTABLE", "tshark").strip()
 
 PROJECT_ROOT = Path(r"D:\EtherCATAnalyzer\EtherCATAnalyzer_net472")
 AGENTS_PATH = PROJECT_ROOT / "AGENTS.md"

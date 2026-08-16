@@ -17,6 +17,12 @@ from retrieval.pdf_spec import (
 )
 from retrieval.raw_capture import find_first_coe_sdo_packet
 from retrieval.source_retrieval import search_source
+from retrieval.tshark_capture import (
+    export_frame_json,
+    query_capture,
+    validate_export_frame_arguments,
+    validate_query_capture_arguments,
+)
 
 
 MAX_TOOL_CALLS = 3
@@ -32,9 +38,17 @@ Do not request raw PDF evidence by default when the readable source is sufficien
 Use only the following read-only tools when their evidence is needed:
 - search_source(query): deterministic C# source search
 - search_spec(query): primary deterministic ET1100.md readable evidence search
+- query_capture(capture, display_filter, fields, limit): bounded frame-level TShark field query
+- export_frame_json(capture, frame_number): exact one-frame canonical TShark JSON evidence
 - search_spec_raw(spec, query, limit): bounded original ET1100 PDF page search
 - get_spec_raw_pages(spec, pages): bounded complete original PDF page text
 - find_first_coe_sdo(): first raw TShark CoE SDO match, with no arguments
+
+For capture questions, translate natural language into these structured tools only.
+Never generate or execute a shell, PowerShell, Python, or arbitrary TShark command.
+Use query_capture for candidate frame discovery and export_frame_json only when the
+complete protocol tree is needed. query_capture does not pair fields across EtherCAT
+datagrams.
 
 On every turn return exactly one JSON object and no markdown fences. To request a tool:
 {"action":"tool","tool":"<allowed tool name>","arguments":{...}}
@@ -170,11 +184,23 @@ def _get_spec_raw_pages_tool(arguments: Any) -> Dict[str, object]:
     }
 
 
+def _query_capture_tool(arguments: Any) -> Dict[str, object]:
+    validated = validate_query_capture_arguments(arguments)
+    return query_capture(**validated)
+
+
+def _export_frame_json_tool(arguments: Any) -> Dict[str, object]:
+    validated = validate_export_frame_arguments(arguments)
+    return export_frame_json(**validated)
+
+
 _TOOL_HANDLERS = {
     "search_source": _search_source_tool,
     "search_spec": _search_spec_tool,
     "search_spec_raw": _search_spec_raw_tool,
     "get_spec_raw_pages": _get_spec_raw_pages_tool,
+    "query_capture": _query_capture_tool,
+    "export_frame_json": _export_frame_json_tool,
     "find_first_coe_sdo": _find_first_coe_sdo_tool,
 }
 
@@ -185,7 +211,7 @@ def _tool_result(name: str, arguments: Any) -> str:
         return json.dumps({"error": f"Unsupported tool: {name}"})
     try:
         result = handler(arguments)
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
         result = {"error": str(exc)}
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
@@ -200,6 +226,18 @@ def _tool_call_key(name: str, arguments: Any):
     if name == "get_spec_raw_pages":
         spec, pages = _validated_raw_pages_arguments(arguments)
         return name, spec, tuple(pages)
+    if name == "query_capture":
+        validated = validate_query_capture_arguments(arguments)
+        return (
+            name,
+            validated["capture"],
+            validated["display_filter"],
+            tuple(validated["fields"]),
+            validated["limit"],
+        )
+    if name == "export_frame_json":
+        validated = validate_export_frame_arguments(arguments)
+        return name, validated["capture"], validated["frame_number"]
     if name == "find_first_coe_sdo":
         return name, json.dumps(arguments, sort_keys=True, separators=(",", ":"))
     return name, json.dumps(arguments, sort_keys=True, default=str)
@@ -220,6 +258,18 @@ def _tool_display(name: str, arguments: Any) -> str:
         except (TypeError, ValueError):
             return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
         return f"{name}(spec=\"{spec}\", pages={pages})"
+    if name == "query_capture":
+        try:
+            validated = validate_query_capture_arguments(arguments)
+        except (TypeError, ValueError):
+            return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+        return f"{name}({json.dumps(validated, ensure_ascii=False, sort_keys=True)})"
+    if name == "export_frame_json":
+        try:
+            validated = validate_export_frame_arguments(arguments)
+        except (TypeError, ValueError):
+            return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+        return f"{name}({json.dumps(validated, ensure_ascii=False, sort_keys=True)})"
     try:
         query = _validated_query(arguments)
     except (TypeError, ValueError):
@@ -242,6 +292,12 @@ def _validate_tool_arguments(name: str, arguments: Any) -> None:
         return
     if name == "get_spec_raw_pages":
         _validated_raw_pages_arguments(arguments)
+        return
+    if name == "query_capture":
+        validate_query_capture_arguments(arguments)
+        return
+    if name == "export_frame_json":
+        validate_export_frame_arguments(arguments)
         return
     if name == "find_first_coe_sdo":
         if not isinstance(arguments, dict) or arguments:

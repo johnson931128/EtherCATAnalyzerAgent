@@ -38,3 +38,8 @@ temp/
 spec/original/**/*.pdf
 spec/generated/**/*.md
 spec/generated/**/*.json
+
+# Local capture assets
+captures/**/*.pcap
+captures/**/*.pcapng
+captures/**/*.json
