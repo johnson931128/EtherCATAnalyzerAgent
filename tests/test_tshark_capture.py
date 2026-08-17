@@ -477,10 +477,11 @@ class TSharkCaptureToolTests(unittest.TestCase):
             )
 
         command = run.call_args.args[0]
-        self.assertIn("ecat_mailbox.coe.sdoidx == 0x1a00", command)
-        self.assertIn("ecat_mailbox.coe.sdosub == 0x01", command)
-        self.assertIn("frame.number >= 41400", command)
-        self.assertIn("frame.number <= 42500", command)
+        display_filter = command[command.index("-Y") + 1]
+        self.assertIn("ecat_mailbox.coe.sdoidx == 0x1a00", display_filter)
+        self.assertIn("ecat_mailbox.coe.sdosub == 0x01", display_filter)
+        self.assertIn("frame.number >= 41400", display_filter)
+        self.assertIn("frame.number <= 42500", display_filter)
 
     def test_query_sdo_object_returns_only_matching_datagram(self):
         packet = self._packet(
