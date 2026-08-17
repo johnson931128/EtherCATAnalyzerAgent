@@ -3,6 +3,7 @@
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from core import config
 from retrieval.tshark_capture import query_frames
 
 
@@ -599,8 +600,13 @@ def build_sdo_verification_context(
 
     context["parsed_claims"] = claims
     try:
-        capture_name = capture or extract_capture_name(user_question)
-        if capture_name is None:
+        if capture is not None:
+            capture_name = capture
+        else:
+            capture_name = extract_capture_name(user_question)
+            if capture_name is None:
+                capture_name = config.DEFAULT_CAPTURE_NAME
+        if capture_name is None or not str(capture_name).strip():
             raise ValueError("capture logical filename is missing")
         from retrieval.tshark_capture import validate_capture_name
 

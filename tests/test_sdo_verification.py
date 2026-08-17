@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from core import config
 from retrieval import sdo_verification
 
 
@@ -209,6 +210,86 @@ class SDOVerificationTests(unittest.TestCase):
             },
         )
         self.assertEqual(context["capture"], "sample.pcapng")
+
+    def _build_context_with_capture(self, text, capture=None, default=None):
+        with patch.object(config, "DEFAULT_CAPTURE_NAME", default), patch.object(
+            sdo_verification,
+            "_build_reference_context",
+            return_value=[],
+        ), patch.object(
+            sdo_verification,
+            "verify_sdo_transactions",
+            return_value=[],
+        ) as verify:
+            context = sdo_verification.build_sdo_verification_context(
+                text, capture=capture
+            )
+        return context, verify
+
+    def test_context_task_capture_precedes_default(self):
+        text = (
+            "Capture: task.pcapng\n"
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, verify = self._build_context_with_capture(
+            text, default="default.pcapng"
+        )
+        self.assertEqual(context["capture"], "task.pcapng")
+        verify.assert_called_once_with(context["parsed_claims"], "task.pcapng")
+
+    def test_context_uses_default_when_task_has_no_capture(self):
+        text = (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, verify = self._build_context_with_capture(
+            text, default="PowerOn.pcapng"
+        )
+        self.assertEqual(context["capture"], "PowerOn.pcapng")
+        verify.assert_called_once_with(context["parsed_claims"], "PowerOn.pcapng")
+
+    def test_context_explicit_capture_precedes_task_and_default(self):
+        text = (
+            "Capture: task.pcapng\n"
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, verify = self._build_context_with_capture(
+            text, capture="explicit.pcapng", default="default.pcapng"
+        )
+        self.assertEqual(context["capture"], "explicit.pcapng")
+        verify.assert_called_once_with(context["parsed_claims"], "explicit.pcapng")
+
+    def test_context_invalid_default_is_inconclusive(self):
+        text = (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, verify = self._build_context_with_capture(text, default="bad.txt")
+        self.assertIsNone(context["capture"])
+        self.assertEqual(context["verification_results"][0]["result"], "INCONCLUSIVE")
+        self.assertIn(".pcap", context["verification_results"][0]["mismatch_reasons"][0])
+        verify.assert_not_called()
+
+    def test_context_without_capture_or_default_is_inconclusive(self):
+        text = (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, verify = self._build_context_with_capture(text)
+        self.assertIsNone(context["capture"])
+        self.assertEqual(context["verification_results"][0]["result"], "INCONCLUSIVE")
+        self.assertEqual(
+            context["verification_results"][0]["mismatch_reasons"],
+            ["capture logical filename is missing"],
+        )
+        verify.assert_not_called()
 
 
 if __name__ == "__main__":

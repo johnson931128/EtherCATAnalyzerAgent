@@ -167,6 +167,17 @@ SPEC_GENERATED_ROOT  = spec/generated/
 CAPTURE_INPUT_ROOT   = captures/ (or the `CAPTURE_INPUT_ROOT` environment override)
 ```
 
+For DLL SDO verification, set an optional default logical capture filename when
+the pasted DLL output does not name a capture:
+
+```powershell
+$env:DEFAULT_CAPTURE_NAME="PowerOn.pcapng"
+```
+
+`CAPTURE_INPUT_ROOT` determines the capture directory. `DEFAULT_CAPTURE_NAME`
+determines the logical capture filename used by DLL verification when neither
+an explicit argument nor a filename in the task is available.
+
 The primary ET1100 retrieval path reads `spec/generated/ET1100/ET1100.md`. Raw
 fallback retrieval resolves exactly one PDF in `spec/original/ET1100/`; no
 machine-specific absolute ET1100 PDF path is used. The external DLL project is not

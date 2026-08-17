@@ -9,6 +9,7 @@ SPEC_GENERATED_ROOT = SPEC_ROOT / "generated"
 CAPTURE_INPUT_ROOT = Path(
     os.environ.get("CAPTURE_INPUT_ROOT", str(REPOSITORY_ROOT / "captures"))
 ).expanduser()
+DEFAULT_CAPTURE_NAME = os.environ.get("DEFAULT_CAPTURE_NAME", "").strip() or None
 TSHARK_EXECUTABLE = os.environ.get("TSHARK_EXECUTABLE", "tshark").strip()
 
 PROJECT_ROOT = Path(r"D:\EtherCATAnalyzer\EtherCATAnalyzer_net472")
