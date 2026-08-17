@@ -16,6 +16,7 @@ from retrieval.pdf_spec import (
     search_spec_raw,
 )
 from retrieval.raw_capture import find_first_coe_sdo_packet
+from retrieval.sdo_verification import build_sdo_verification_context
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
     export_frame_json,
@@ -403,8 +404,45 @@ def _agent_prompt(task: str, evidence: List[str], force_final: bool = False) -> 
     return prompt
 
 
+def _sdo_verification_prompt(context: Dict[str, object]) -> str:
+    return (
+        "You explain deterministic EtherCAT SDO verification results.\n"
+        "Python has already parsed the DLL claims, selected all frames, paired fields "
+        "only within EtherCAT datagrams, and assigned PASS, FAIL, or INCONCLUSIVE.\n"
+        "The result values are authoritative. Never change a result, invent evidence, "
+        "re-parse claims, select frames, build filters, or request another tool. "
+        "Explain mismatches and WKC as independent evidence.\n"
+        "Return exactly one JSON object: "
+        '{"action":"final","answer":"<concise explanation>"}.\n\n'
+        "Deterministic verification context:\n"
+        + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _run_sdo_verification_agent(task: str, context: Dict[str, object]):
+    try:
+        response = llm.invoke(_sdo_verification_prompt(context))
+        action = _parse_action(response.content)
+        if action["action"] == "final":
+            answer = action["answer"]
+        else:
+            answer = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        answer = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "result": answer,
+        "capture_mode": "sdo_verification",
+        "task_type": "verification",
+        "tools_used": ["deterministic_sdo_verification"],
+    }
+
+
 def run_engineering_tool_agent(state: AgentState):
     """Run Qwen with at most MAX_TOOL_CALLS deterministic tool executions."""
+    verification_context = build_sdo_verification_context(state["task"])
+    if verification_context is not None:
+        return _run_sdo_verification_agent(state["task"], verification_context)
+
     tools_used: List[str] = []
     evidence: List[str] = []
     cached_results: Dict[object, str] = {}

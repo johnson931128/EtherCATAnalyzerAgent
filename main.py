@@ -6,6 +6,7 @@ from agent.graph import graph
 from core.config import RAW_TSHARK_PATH
 from retrieval.pdf_spec import search_pdf
 from retrieval.raw_capture import find_first_coe_sdo_packet
+from retrieval.sdo_verification import is_sdo_transaction_input
 from retrieval.source_retrieval import search_source, select_source_with_llm
 from retrieval.spec_retrieval import plan_spec_queries, select_spec_with_llm
 from workflows.spec_ingestion import ingest_spec
@@ -77,7 +78,7 @@ def append_build_docs_result(existing, report):
 def run_task(task, use_tool_agent=False):
     """Run one task through the existing graph and persist its result."""
     graph_input = {"task": task}
-    if use_tool_agent:
+    if is_sdo_transaction_input(task) or use_tool_agent:
         graph_input["route_mode"] = "tool_agent"
     graph_result = graph.invoke(graph_input)
     if graph_result.get("task_type") == "build_docs":

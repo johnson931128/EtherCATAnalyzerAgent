@@ -6,6 +6,7 @@ from core.context import load_context
 from core.state import AgentState
 from retrieval.capture import query_capture, select_capture_mode
 from retrieval.docs import load_docs_index, load_selected_docs, select_docs
+from retrieval.sdo_verification import is_sdo_transaction_input
 from retrieval.source import select_source
 from workflows.build_docs import build_docs
 from workflows.result_check import is_result_check_task, result_check
@@ -49,6 +50,8 @@ def is_build_docs_task(task: str) -> bool:
 
 
 def route_task(state: AgentState) -> str:
+    if is_sdo_transaction_input(state["task"]):
+        return "tool_agent"
     if is_build_docs_task(state["task"]):
         return "build_docs"
     if is_result_check_task(state["task"]):
