@@ -15,7 +15,9 @@ DEFAULT_QUERY_LIMIT = 50
 MAX_QUERY_LIMIT = 200
 MAX_DISPLAY_FILTER_LENGTH = 512
 MAX_FIELD_COUNT = 32
+MAX_BATCH_FRAME_COUNT = 50
 TSHARK_TIMEOUT_SECONDS = 60
+JSON_LAYER_SELECTOR = "frame eth ecat ecat_mailbox"
 
 CAPTURE_FIELD_ALLOWLIST = frozenset(
     {
@@ -98,7 +100,7 @@ def resolve_capture_path(capture: str) -> Path:
         raise ValueError("capture must resolve inside the repository capture root")
     if not resolved.is_file():
         raise FileNotFoundError(
-            f"Capture not found: {normalized}; expected under captures/"
+            f"Capture not found: {normalized}; expected under {root}"
         )
     return resolved
 
@@ -139,6 +141,80 @@ def validate_limit(limit: Any) -> int:
     return limit
 
 
+def _validate_positive_integer(value: Any, name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def validate_frame_numbers(frame_numbers: Any) -> List[int]:
+    if not isinstance(frame_numbers, list) or not frame_numbers:
+        raise ValueError("frame_numbers must be a non-empty list")
+
+    unique_frames: List[int] = []
+    for frame_number in frame_numbers:
+        _validate_positive_integer(frame_number, "each frame number")
+        if frame_number not in unique_frames:
+            unique_frames.append(frame_number)
+    if len(unique_frames) > MAX_BATCH_FRAME_COUNT:
+        raise ValueError(
+            f"frame_numbers must contain at most {MAX_BATCH_FRAME_COUNT} unique frames"
+        )
+    return unique_frames
+
+
+def validate_query_frames_arguments(arguments: Any) -> Dict[str, object]:
+    expected = {"capture", "frame_numbers"}
+    if not isinstance(arguments, dict) or set(arguments) != expected:
+        raise ValueError("query_frames expects exactly: capture, frame_numbers")
+    return {
+        "capture": validate_capture_name(arguments["capture"]),
+        "frame_numbers": validate_frame_numbers(arguments["frame_numbers"]),
+    }
+
+
+def _validate_optional_positive_integer(value: Any, name: str) -> Any:
+    if value is not None:
+        _validate_positive_integer(value, name)
+    return value
+
+
+def validate_query_sdo_object_arguments(arguments: Any) -> Dict[str, object]:
+    expected = {"capture", "index", "subindex", "frame_start", "frame_end"}
+    if not isinstance(arguments, dict) or set(arguments) != expected:
+        raise ValueError(
+            "query_sdo_object expects exactly: capture, index, subindex, "
+            "frame_start, frame_end"
+        )
+
+    index = arguments["index"]
+    if type(index) is not int or not 0 <= index <= 0xFFFF:
+        raise ValueError("index must be an integer between 0x0000 and 0xFFFF")
+
+    subindex = arguments["subindex"]
+    if subindex is not None and (
+        type(subindex) is not int or not 0 <= subindex <= 0xFF
+    ):
+        raise ValueError("subindex must be null or an integer between 0x00 and 0xFF")
+
+    frame_start = _validate_optional_positive_integer(
+        arguments["frame_start"], "frame_start"
+    )
+    frame_end = _validate_optional_positive_integer(
+        arguments["frame_end"], "frame_end"
+    )
+    if frame_start is not None and frame_end is not None and frame_start > frame_end:
+        raise ValueError("frame_start must be less than or equal to frame_end")
+
+    return {
+        "capture": validate_capture_name(arguments["capture"]),
+        "index": index,
+        "subindex": subindex,
+        "frame_start": frame_start,
+        "frame_end": frame_end,
+    }
+
+
 def validate_query_capture_arguments(arguments: Any) -> Dict[str, object]:
     expected = {"capture", "display_filter", "fields", "limit"}
     if not isinstance(arguments, dict) or set(arguments) != expected:
@@ -163,6 +239,260 @@ def validate_export_frame_arguments(arguments: Any) -> Dict[str, object]:
     return {
         "capture": validate_capture_name(arguments["capture"]),
         "frame_number": frame_number,
+    }
+
+
+def _parse_tshark_json(stdout: str) -> List[Dict[str, Any]]:
+    try:
+        packets = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Malformed TShark JSON output: {exc}") from exc
+
+    if not isinstance(packets, list):
+        raise ValueError("TShark JSON output must be a top-level packet array")
+    if any(not isinstance(packet, dict) for packet in packets):
+        raise ValueError("TShark JSON packet must be an object")
+    return packets
+
+
+def _field_values(value: Any, field_names: set[str]) -> List[Any]:
+    """Find fields only within one datagram object."""
+    found: List[Any] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            if key_text in field_names:
+                found.append(child)
+            found.extend(_field_values(child, field_names))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_field_values(child, field_names))
+    return found
+
+
+def _first_field(value: Any, *field_names: str) -> Any:
+    values = _field_values(value, set(field_names))
+    return values[0] if values else None
+
+
+def _datagram_evidence(
+    frame_number: int, datagram_sequence: int, datagram: Dict[str, Any]
+) -> Dict[str, object]:
+    mailbox_fields = {
+        "ecat_mailbox",
+        "ecat_mailbox.length",
+        "ecat_mailbox.address",
+        "ecat_mailbox.priority",
+        "ecat_mailbox.type",
+        "ecat_mailbox.counter",
+    }
+    coe_fields = {
+        "ecat_mailbox.coe.type",
+        "ecat_mailbox.coe.sdoreq",
+        "ecat_mailbox.coe.sdores",
+        "ecat_mailbox.coe.sdoidx",
+        "ecat_mailbox.coe.sdosub",
+        "ecat_mailbox.coe.sdodata",
+        "ecat_mailbox.coe.abortcode",
+    }
+    mailbox = None
+    if _field_values(datagram, mailbox_fields) or _field_values(datagram, coe_fields):
+        mailbox = {
+            "type": _first_field(datagram, "ecat_mailbox.type"),
+            "counter": _first_field(datagram, "ecat_mailbox.counter"),
+        }
+
+    coe = None
+    if _field_values(datagram, coe_fields):
+        coe = {
+            "type": _first_field(datagram, "ecat_mailbox.coe.type"),
+            "sdo_request": _first_field(datagram, "ecat_mailbox.coe.sdoreq"),
+            "sdo_response": _first_field(datagram, "ecat_mailbox.coe.sdores"),
+            "index": _first_field(datagram, "ecat_mailbox.coe.sdoidx"),
+            "subindex": _first_field(datagram, "ecat_mailbox.coe.sdosub"),
+            "data": _first_field(datagram, "ecat_mailbox.coe.sdodata"),
+            "abort_code": _first_field(datagram, "ecat_mailbox.coe.abortcode"),
+        }
+
+    return {
+        "frame_number": frame_number,
+        "datagram_sequence": datagram_sequence,
+        "cmd": _first_field(datagram, "ecat.cmd"),
+        "idx": _first_field(datagram, "ecat.idx"),
+        "adp": _first_field(datagram, "ecat.adp"),
+        "ado": _first_field(datagram, "ecat.ado"),
+        "data_length": _first_field(datagram, "ecat.subframe.length"),
+        "wkc": _first_field(datagram, "ecat.cnt"),
+        "mailbox": mailbox,
+        "coe": coe,
+    }
+
+
+def _iter_datagram_objects(ecat_layer: Any):
+    if not isinstance(ecat_layer, dict):
+        return
+    for name, datagram in ecat_layer.items():
+        if str(name).startswith("EtherCAT datagram:") and isinstance(datagram, dict):
+            yield datagram
+
+
+def _frame_number(packet: Dict[str, Any]) -> Any:
+    source = packet.get("_source")
+    layers = source.get("layers") if isinstance(source, dict) else None
+    frame_layer = layers.get("frame") if isinstance(layers, dict) else None
+    value = _first_field(frame_layer, "frame.number")
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _compact_packet(packet: Dict[str, Any]) -> Dict[str, object]:
+    frame_number = _frame_number(packet)
+    if frame_number is None:
+        raise ValueError("TShark packet is missing frame.number")
+    source = packet.get("_source")
+    layers = source.get("layers") if isinstance(source, dict) else None
+    ecat_layer = layers.get("ecat") if isinstance(layers, dict) else None
+    return {
+        "frame_number": frame_number,
+        "datagrams": [
+            _datagram_evidence(frame_number, sequence, datagram)
+            for sequence, datagram in enumerate(
+                _iter_datagram_objects(ecat_layer), start=1
+            )
+        ],
+    }
+
+
+def _as_integer(value: Any) -> Any:
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            try:
+                return int(value, 10)
+            except ValueError:
+                return None
+    return None
+
+
+def _matches_sdo_object(
+    datagram: Dict[str, object], index: int, subindex: Any
+) -> bool:
+    coe = datagram.get("coe")
+    if not isinstance(coe, dict):
+        return False
+    if _as_integer(coe.get("index")) != index:
+        return False
+    return subindex is None or _as_integer(coe.get("subindex")) == subindex
+
+
+def _build_json_query_command(capture_path: Path, display_filter: str) -> List[str]:
+    command = _tshark_command_prefix(capture_path)
+    command.extend(
+        ["-Y", display_filter, "-T", "json", "-J", JSON_LAYER_SELECTOR]
+    )
+    return command
+
+
+def _build_sdo_display_filter(
+    index: int, subindex: Any, frame_start: Any, frame_end: Any
+) -> str:
+    clauses = [f"ecat_mailbox.coe.sdoidx == 0x{index:04x}"]
+    if subindex is not None:
+        clauses.append(f"ecat_mailbox.coe.sdosub == 0x{subindex:02x}")
+    if frame_start is not None:
+        clauses.append(f"frame.number >= {frame_start}")
+    if frame_end is not None:
+        clauses.append(f"frame.number <= {frame_end}")
+    return " && ".join(clauses)
+
+
+def query_frames(capture: str, frame_numbers: List[int]) -> Dict[str, object]:
+    """Return compact EtherCAT datagram evidence for a bounded frame batch."""
+    arguments = validate_query_frames_arguments(
+        {"capture": capture, "frame_numbers": frame_numbers}
+    )
+    capture_name = str(arguments["capture"])
+    requested_frames = list(arguments["frame_numbers"])
+    capture_path = resolve_capture_path(capture_name)
+    display_filter = "frame.number in {" + ",".join(
+        str(frame) for frame in requested_frames
+    ) + "}"
+    packets = _parse_tshark_json(
+        _run_tshark(_build_json_query_command(capture_path, display_filter))
+    )
+
+    compact_by_frame = {}
+    for packet in packets:
+        compact = _compact_packet(packet)
+        compact_by_frame[compact["frame_number"]] = compact
+    returned_frames = [frame for frame in requested_frames if frame in compact_by_frame]
+    return {
+        "capture": capture_name,
+        "requested_frames": requested_frames,
+        "returned_frames": returned_frames,
+        "missing_frames": [
+            frame for frame in requested_frames if frame not in compact_by_frame
+        ],
+        "frames": [compact_by_frame[frame] for frame in returned_frames],
+    }
+
+
+def query_sdo_object(
+    capture: str,
+    index: int,
+    subindex: Any,
+    frame_start: Any,
+    frame_end: Any,
+) -> Dict[str, object]:
+    """Return only datagrams containing the requested SDO object."""
+    arguments = validate_query_sdo_object_arguments(
+        {
+            "capture": capture,
+            "index": index,
+            "subindex": subindex,
+            "frame_start": frame_start,
+            "frame_end": frame_end,
+        }
+    )
+    capture_name = str(arguments["capture"])
+    object_index = int(arguments["index"])
+    object_subindex = arguments["subindex"]
+    frame_start_value = arguments["frame_start"]
+    frame_end_value = arguments["frame_end"]
+    display_filter = _build_sdo_display_filter(
+        object_index, object_subindex, frame_start_value, frame_end_value
+    )
+    capture_path = resolve_capture_path(capture_name)
+    packets = _parse_tshark_json(
+        _run_tshark(_build_json_query_command(capture_path, display_filter))
+    )
+
+    frames = []
+    for packet in packets:
+        compact = _compact_packet(packet)
+        matching_datagrams = [
+            datagram
+            for datagram in compact["datagrams"]
+            if _matches_sdo_object(datagram, object_index, object_subindex)
+        ]
+        if matching_datagrams:
+            frames.append(
+                {"frame_number": compact["frame_number"], "datagrams": matching_datagrams}
+            )
+    return {
+        "capture": capture_name,
+        "index": object_index,
+        "subindex": object_subindex,
+        "frame_start": frame_start_value,
+        "frame_end": frame_end_value,
+        "returned_frames": [frame["frame_number"] for frame in frames],
+        "frames": frames,
     }
 
 

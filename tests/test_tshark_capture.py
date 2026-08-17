@@ -30,6 +30,45 @@ class TSharkCaptureToolTests(unittest.TestCase):
             returncode=returncode,
         )
 
+    def _packet(self, frame_number, datagrams):
+        return {
+            "_source": {
+                "layers": {
+                    "frame": {"frame.number": str(frame_number)},
+                    "eth": {},
+                    "ecat": {
+                        f"EtherCAT datagram: {sequence}": datagram
+                        for sequence, datagram in enumerate(datagrams, start=1)
+                    },
+                    "ecat_mailbox": {},
+                }
+            }
+        }
+
+    def _sdo_datagram(self, adp="0x0001", subindex="0x01", wkc="0x0001"):
+        return {
+            "Header": {
+                "ecat.cmd": "APRD",
+                "ecat.idx": "0x01",
+                "ecat.adp": adp,
+                "ecat.ado": "0x0000",
+                "ecat.subframe.length": "0x000a",
+            },
+            "ecat.cnt": wkc,
+            "ecat_mailbox": {
+                "ecat_mailbox.type": "0x03",
+                "ecat_mailbox.counter": "0x01",
+                "ecat_mailbox.coe": {
+                    "ecat_mailbox.coe.type": "0x02",
+                    "ecat_mailbox.coe.sdoreq": "0x01",
+                    "ecat_mailbox.coe.sdoidx": "0x1a00",
+                    "ecat_mailbox.coe.sdosub": subindex,
+                    "ecat_mailbox.coe.sdodata": "0x60410010",
+                    "ecat_mailbox.coe.abortcode": None,
+                },
+            },
+        }
+
     def test_capture_path_traversal_is_rejected(self):
         with self.assertRaises(ValueError):
             tshark_capture.resolve_capture_path("../sample.pcapng")
@@ -226,6 +265,157 @@ class TSharkCaptureToolTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "exactly one packet"):
                 tshark_capture.export_frame_json("sample.pcapng", 41462)
 
+    def test_query_frames_batches_one_tshark_call_and_deduplicates_frames(self):
+        packets = [
+            self._packet(41460, [self._sdo_datagram()]),
+            self._packet(41614, [self._sdo_datagram(adp="0x0002")]),
+        ]
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps(packets)),
+        ) as run:
+            result = tshark_capture.query_frames(
+                "sample.pcapng", [41460, 41614, 41460]
+            )
+
+        self.assertEqual(result["requested_frames"], [41460, 41614])
+        self.assertEqual(result["returned_frames"], [41460, 41614])
+        self.assertEqual(run.call_count, 1)
+        command = run.call_args.args[0]
+        self.assertIn("frame.number in {41460,41614}", command)
+        self.assertIn("-T", command)
+        self.assertIn("json", command)
+        self.assertIn("frame eth ecat ecat_mailbox", command)
+
+    def test_query_frames_reports_missing_frames(self):
+        packet = self._packet(41460, [self._sdo_datagram()])
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ):
+            result = tshark_capture.query_frames(
+                "sample.pcapng", [41460, 41614]
+            )
+
+        self.assertEqual(result["returned_frames"], [41460])
+        self.assertEqual(result["missing_frames"], [41614])
+
+    def test_query_frames_rejects_invalid_frame_numbers(self):
+        invalid_values = [[], [0], [-1], [True], ["41460"], list(range(1, 52))]
+        for frame_numbers in invalid_values:
+            with self.subTest(frame_numbers=frame_numbers), self.assertRaises(
+                ValueError
+            ):
+                tshark_capture.query_frames("sample.pcapng", frame_numbers)
+
+    def test_query_frames_keeps_fields_inside_datagram_boundaries(self):
+        packet = self._packet(
+            41460,
+            [
+                self._sdo_datagram(adp="0x0001", wkc="0x0001"),
+                {
+                    "Header": {
+                        "ecat.cmd": "APRD",
+                        "ecat.adp": "0x0002",
+                        "ecat.ado": "0x0130",
+                    },
+                    "ecat.cnt": "0x0009",
+                },
+            ],
+        )
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ):
+            result = tshark_capture.query_frames("sample.pcapng", [41460])
+
+        datagrams = result["frames"][0]["datagrams"]
+        self.assertEqual(datagrams[0]["adp"], "0x0001")
+        self.assertEqual(datagrams[0]["wkc"], "0x0001")
+        self.assertEqual(datagrams[0]["coe"]["index"], "0x1a00")
+        self.assertEqual(datagrams[1]["adp"], "0x0002")
+        self.assertEqual(datagrams[1]["wkc"], "0x0009")
+        self.assertIsNone(datagrams[1]["coe"])
+
+    def test_query_sdo_object_builds_index_filter_and_returns_matching_datagrams(self):
+        packet = self._packet(
+            41460,
+            [
+                self._sdo_datagram(subindex="0x01"),
+                self._sdo_datagram(adp="0x0002", subindex="0x02"),
+            ],
+        )
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ) as run:
+            result = tshark_capture.query_sdo_object(
+                "sample.pcapng", 0x1A00, None, None, None
+            )
+
+        self.assertEqual(len(result["frames"]), 1)
+        self.assertEqual(len(result["frames"][0]["datagrams"]), 2)
+        command = run.call_args.args[0]
+        self.assertIn("ecat_mailbox.coe.sdoidx == 0x1a00", command)
+        self.assertNotIn("ecat_mailbox.coe.sdosub ==", command)
+
+    def test_query_sdo_object_builds_subindex_and_frame_range_filter(self):
+        packet = self._packet(41460, [self._sdo_datagram()])
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ) as run:
+            tshark_capture.query_sdo_object(
+                "sample.pcapng", 0x1A00, 0x01, 41400, 42500
+            )
+
+        command = run.call_args.args[0]
+        self.assertIn("ecat_mailbox.coe.sdoidx == 0x1a00", command)
+        self.assertIn("ecat_mailbox.coe.sdosub == 0x01", command)
+        self.assertIn("frame.number >= 41400", command)
+        self.assertIn("frame.number <= 42500", command)
+
+    def test_query_sdo_object_returns_only_matching_datagram(self):
+        packet = self._packet(
+            41460,
+            [
+                self._sdo_datagram(subindex="0x01"),
+                self._sdo_datagram(adp="0x0002", subindex="0x02"),
+            ],
+        )
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ):
+            result = tshark_capture.query_sdo_object(
+                "sample.pcapng", 0x1A00, 0x01, None, None
+            )
+
+        self.assertEqual(len(result["frames"][0]["datagrams"]), 1)
+        self.assertEqual(result["frames"][0]["datagrams"][0]["adp"], "0x0001")
+
+    def test_query_sdo_object_rejects_invalid_arguments(self):
+        invalid_arguments = [
+            {"index": -1, "subindex": None, "frame_start": None, "frame_end": None},
+            {"index": 0x10000, "subindex": None, "frame_start": None, "frame_end": None},
+            {"index": 0x1A00, "subindex": -1, "frame_start": None, "frame_end": None},
+            {"index": 0x1A00, "subindex": 0x100, "frame_start": None, "frame_end": None},
+            {"index": 0x1A00, "subindex": True, "frame_start": None, "frame_end": None},
+            {"index": 0x1A00, "subindex": None, "frame_start": 0, "frame_end": None},
+            {"index": 0x1A00, "subindex": None, "frame_start": True, "frame_end": None},
+            {"index": 0x1A00, "subindex": None, "frame_start": 20, "frame_end": 10},
+        ]
+        for values in invalid_arguments:
+            arguments = {"capture": "sample.pcapng", **values}
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                tshark_capture.validate_query_sdo_object_arguments(arguments)
+
     def test_agent_rejects_unknown_capture_argument(self):
         action = json.dumps(
             {
@@ -281,6 +471,59 @@ class TSharkCaptureToolTests(unittest.TestCase):
         export.assert_called_once_with(**arguments)
         self.assertEqual(result, evidence)
 
+    def test_agent_rejects_malformed_new_capture_tool_arguments(self):
+        for tool, arguments in (
+            (
+                "query_frames",
+                {"capture": "sample.pcapng", "frame_numbers": [41462], "argv": []},
+            ),
+            (
+                "query_sdo_object",
+                {
+                    "capture": "sample.pcapng",
+                    "index": 0x1A00,
+                    "subindex": 1,
+                    "frame_start": None,
+                },
+            ),
+        ):
+            action = json.dumps(
+                {"action": "tool", "tool": tool, "arguments": arguments}
+            )
+            with self.subTest(tool=tool), self.assertRaises(ValueError):
+                engineering_tool_agent._parse_action(action)
+
+    def test_agent_dispatches_new_capture_tools(self):
+        frame_evidence = {"capture": "sample.pcapng", "frames": []}
+        frame_arguments = {"capture": "sample.pcapng", "frame_numbers": [41462]}
+        with patch.object(
+            engineering_tool_agent, "query_frames", return_value=frame_evidence
+        ) as query_frames:
+            result = json.loads(
+                engineering_tool_agent._tool_result("query_frames", frame_arguments)
+            )
+        query_frames.assert_called_once_with(**frame_arguments)
+        self.assertEqual(result, frame_evidence)
+
+        sdo_evidence = {"capture": "sample.pcapng", "frames": []}
+        sdo_arguments = {
+            "capture": "sample.pcapng",
+            "index": 0x1A00,
+            "subindex": 1,
+            "frame_start": None,
+            "frame_end": None,
+        }
+        with patch.object(
+            engineering_tool_agent, "query_sdo_object", return_value=sdo_evidence
+        ) as query_sdo:
+            result = json.loads(
+                engineering_tool_agent._tool_result(
+                    "query_sdo_object", sdo_arguments
+                )
+            )
+        query_sdo.assert_called_once_with(**sdo_arguments)
+        self.assertEqual(result, sdo_evidence)
+
     def test_capture_tool_cache_keys_are_stable_after_field_deduplication(self):
         first = {
             "capture": "sample.pcapng",
@@ -297,6 +540,27 @@ class TSharkCaptureToolTests(unittest.TestCase):
         self.assertEqual(
             engineering_tool_agent._tool_call_key("query_capture", first),
             engineering_tool_agent._tool_call_key("query_capture", second),
+        )
+
+    def test_query_frames_cache_key_reuses_same_batch_frame_set(self):
+        first = {"capture": "sample.pcapng", "frame_numbers": [41462, 41460, 41462]}
+        second = {"capture": "sample.pcapng", "frame_numbers": [41460, 41462]}
+        self.assertEqual(
+            engineering_tool_agent._tool_call_key("query_frames", first),
+            engineering_tool_agent._tool_call_key("query_frames", second),
+        )
+
+    def test_query_sdo_cache_key_is_stable_after_validation(self):
+        arguments = {
+            "capture": "sample.pcapng",
+            "index": 0x1A00,
+            "subindex": None,
+            "frame_start": None,
+            "frame_end": None,
+        }
+        self.assertEqual(
+            engineering_tool_agent._tool_call_key("query_sdo_object", arguments),
+            ("query_sdo_object", "sample.pcapng", 0x1A00, None, None, None),
         )
 
 

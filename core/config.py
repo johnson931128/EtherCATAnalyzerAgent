@@ -6,7 +6,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SPEC_ROOT = REPOSITORY_ROOT / "spec"
 SPEC_ORIGINAL_ROOT = SPEC_ROOT / "original"
 SPEC_GENERATED_ROOT = SPEC_ROOT / "generated"
-CAPTURE_INPUT_ROOT = REPOSITORY_ROOT / "captures"
+CAPTURE_INPUT_ROOT = Path(
+    os.environ.get("CAPTURE_INPUT_ROOT", str(REPOSITORY_ROOT / "captures"))
+).expanduser()
 TSHARK_EXECUTABLE = os.environ.get("TSHARK_EXECUTABLE", "tshark").strip()
 
 PROJECT_ROOT = Path(r"D:\EtherCATAnalyzer\EtherCATAnalyzer_net472")

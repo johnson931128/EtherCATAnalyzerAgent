@@ -19,8 +19,12 @@ from retrieval.raw_capture import find_first_coe_sdo_packet
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
     export_frame_json,
+    query_frames,
+    query_sdo_object,
     query_capture,
     validate_export_frame_arguments,
+    validate_query_frames_arguments,
+    validate_query_sdo_object_arguments,
     validate_query_capture_arguments,
 )
 
@@ -38,17 +42,22 @@ Do not request raw PDF evidence by default when the readable source is sufficien
 Use only the following read-only tools when their evidence is needed:
 - search_source(query): deterministic C# source search
 - search_spec(query): primary deterministic ET1100.md readable evidence search
+- query_frames(capture, frame_numbers): one bounded JSON query for exact frames
+- query_sdo_object(capture, index, subindex, frame_start, frame_end): bounded SDO JSON query
 - query_capture(capture, display_filter, fields, limit): bounded frame-level TShark field query
 - export_frame_json(capture, frame_number): exact one-frame canonical TShark JSON evidence
 - search_spec_raw(spec, query, limit): bounded original ET1100 PDF page search
 - get_spec_raw_pages(spec, pages): bounded complete original PDF page text
 - find_first_coe_sdo(): first raw TShark CoE SDO match, with no arguments
 
-For capture questions, translate natural language into these structured tools only.
-Never generate or execute a shell, PowerShell, Python, or arbitrary TShark command.
-Use query_capture for candidate frame discovery and export_frame_json only when the
-complete protocol tree is needed. query_capture does not pair fields across EtherCAT
-datagrams.
+Capture query policy:
+- Exact frame(s) known -> query_frames; batch all related frames in one call.
+- Exact SDO Index/SubIndex known -> query_sdo_object.
+- Broad or unknown capture search -> query_capture with fields.
+- Need original full packet tree -> export_frame_json.
+- Never treat query_capture flat fields as EtherCAT Datagram association proof.
+- Prefer the fewest TShark invocations and avoid repeated PCAP scans.
+- Never generate or execute a shell, PowerShell, Python, or arbitrary TShark command.
 
 On every turn return exactly one JSON object and no markdown fences. To request a tool:
 {"action":"tool","tool":"<allowed tool name>","arguments":{...}}
@@ -194,6 +203,16 @@ def _export_frame_json_tool(arguments: Any) -> Dict[str, object]:
     return export_frame_json(**validated)
 
 
+def _query_frames_tool(arguments: Any) -> Dict[str, object]:
+    validated = validate_query_frames_arguments(arguments)
+    return query_frames(**validated)
+
+
+def _query_sdo_object_tool(arguments: Any) -> Dict[str, object]:
+    validated = validate_query_sdo_object_arguments(arguments)
+    return query_sdo_object(**validated)
+
+
 _TOOL_HANDLERS = {
     "search_source": _search_source_tool,
     "search_spec": _search_spec_tool,
@@ -201,6 +220,8 @@ _TOOL_HANDLERS = {
     "get_spec_raw_pages": _get_spec_raw_pages_tool,
     "query_capture": _query_capture_tool,
     "export_frame_json": _export_frame_json_tool,
+    "query_frames": _query_frames_tool,
+    "query_sdo_object": _query_sdo_object_tool,
     "find_first_coe_sdo": _find_first_coe_sdo_tool,
 }
 
@@ -238,6 +259,19 @@ def _tool_call_key(name: str, arguments: Any):
     if name == "export_frame_json":
         validated = validate_export_frame_arguments(arguments)
         return name, validated["capture"], validated["frame_number"]
+    if name == "query_frames":
+        validated = validate_query_frames_arguments(arguments)
+        return name, validated["capture"], tuple(sorted(validated["frame_numbers"]))
+    if name == "query_sdo_object":
+        validated = validate_query_sdo_object_arguments(arguments)
+        return (
+            name,
+            validated["capture"],
+            validated["index"],
+            validated["subindex"],
+            validated["frame_start"],
+            validated["frame_end"],
+        )
     if name == "find_first_coe_sdo":
         return name, json.dumps(arguments, sort_keys=True, separators=(",", ":"))
     return name, json.dumps(arguments, sort_keys=True, default=str)
@@ -270,6 +304,15 @@ def _tool_display(name: str, arguments: Any) -> str:
         except (TypeError, ValueError):
             return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
         return f"{name}({json.dumps(validated, ensure_ascii=False, sort_keys=True)})"
+    if name in {"query_frames", "query_sdo_object"}:
+        try:
+            if name == "query_frames":
+                validated = validate_query_frames_arguments(arguments)
+            else:
+                validated = validate_query_sdo_object_arguments(arguments)
+        except (TypeError, ValueError):
+            return f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})"
+        return f"{name}({json.dumps(validated, ensure_ascii=False, sort_keys=True)})"
     try:
         query = _validated_query(arguments)
     except (TypeError, ValueError):
@@ -298,6 +341,12 @@ def _validate_tool_arguments(name: str, arguments: Any) -> None:
         return
     if name == "export_frame_json":
         validate_export_frame_arguments(arguments)
+        return
+    if name == "query_frames":
+        validate_query_frames_arguments(arguments)
+        return
+    if name == "query_sdo_object":
+        validate_query_sdo_object_arguments(arguments)
         return
     if name == "find_first_coe_sdo":
         if not isinstance(arguments, dict) or arguments:
