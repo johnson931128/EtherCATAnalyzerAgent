@@ -6,6 +6,7 @@ from agent.graph import graph
 from core.config import RAW_TSHARK_PATH
 from retrieval.pdf_spec import search_pdf
 from retrieval.raw_capture import find_first_coe_sdo_packet
+from retrieval.result_document import build_result_document
 from retrieval.sdo_verification import is_sdo_transaction_input
 from retrieval.source_retrieval import search_source, select_source_with_llm
 from retrieval.spec_retrieval import plan_spec_queries, select_spec_with_llm
@@ -29,30 +30,6 @@ HELP_TEXT = """Commands:
   /exit          Exit the Agent
 
 Enter any other text to run it directly through the Agent."""
-
-
-def build_result_document(task, graph_result):
-    selected_docs = graph_result.get("selected_docs", "")
-    selected_source = graph_result.get("selected_source", "")
-    capture_mode = graph_result.get("capture_mode", "")
-    agent_result = graph_result.get("result", "")
-    task_section = task if task.endswith("\n") else task + "\n"
-    selected_source_line = "- Selected source:"
-
-    if selected_source:
-        selected_source_line += f" {selected_source}"
-
-    return (
-        "# EtherCAT Analyzer Agent Result\n\n"
-        "## Task\n"
-        f"{task_section}\n"
-        "## Routing\n"
-        f"- Selected docs:\n{selected_docs}\n"
-        f"{selected_source_line}\n"
-        f"- Capture mode: {capture_mode}\n\n"
-        "## Result\n"
-        f"{agent_result}\n"
-    )
 
 
 def append_build_docs_result(existing, report):

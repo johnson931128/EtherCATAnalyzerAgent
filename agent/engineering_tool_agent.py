@@ -409,9 +409,13 @@ def _sdo_verification_prompt(context: Dict[str, object]) -> str:
         "You explain deterministic EtherCAT SDO verification results.\n"
         "Python has already parsed the DLL claims, selected all frames, paired fields "
         "only within EtherCAT datagrams, and assigned PASS, FAIL, or INCONCLUSIVE.\n"
-        "The result values are authoritative. Never change a result, invent evidence, "
-        "re-parse claims, select frames, build filters, or request another tool. "
-        "Explain mismatches and WKC as independent evidence.\n"
+        "The result values and all deterministic evidence are authoritative. Never "
+        "change PASS, FAIL, or INCONCLUSIVE, invent evidence, re-parse claims, select "
+        "frames, build filters, request another tool, or produce a summary table. "
+        "Explain mismatches and WKC as independent evidence; WKC is not SDO success. "
+        "Return only a concise human-readable explanation, without replacing the "
+        "Python-generated Verification Summary, Engineering Evidence, or Engineering "
+        "References sections.\n"
         "Return exactly one JSON object: "
         '{"action":"final","answer":"<concise explanation>"}.\n\n'
         "Deterministic verification context:\n"
@@ -434,6 +438,7 @@ def _run_sdo_verification_agent(task: str, context: Dict[str, object]):
         "capture_mode": "sdo_verification",
         "task_type": "verification",
         "tools_used": ["deterministic_sdo_verification"],
+        "verification_context": context,
     }
 
 

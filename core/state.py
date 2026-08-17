@@ -19,3 +19,4 @@ class AgentState(TypedDict):
     generated_file_path: str
     generated_file_status: str
     tools_used: list
+    verification_context: dict
