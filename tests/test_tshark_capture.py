@@ -30,12 +30,17 @@ class TSharkCaptureToolTests(unittest.TestCase):
             returncode=returncode,
         )
 
-    def _packet(self, frame_number, datagrams):
+    def _packet(self, frame_number, datagrams, source_mac=None, dest_mac=None):
+        eth = {}
+        if source_mac is not None:
+            eth["eth.src"] = source_mac
+        if dest_mac is not None:
+            eth["eth.dst"] = dest_mac
         return {
             "_source": {
                 "layers": {
                     "frame": {"frame.number": str(frame_number)},
-                    "eth": {},
+                    "eth": eth,
                     "ecat": {
                         f"EtherCAT datagram: {sequence}": datagram
                         for sequence, datagram in enumerate(datagrams, start=1)
@@ -45,13 +50,22 @@ class TSharkCaptureToolTests(unittest.TestCase):
             }
         }
 
-    def _sdo_datagram(self, adp="0x0001", subindex="0x01", wkc="0x0001"):
+    def _sdo_datagram(
+        self,
+        adp="0x0001",
+        subindex="0x01",
+        wkc="0x0001",
+        cmd="0x05",
+        ado="0x1000",
+        sdo_request="0x01",
+        sdo_response=None,
+    ):
         return {
             "Header": {
-                "ecat.cmd": "APRD",
+                "ecat.cmd": cmd,
                 "ecat.idx": "0x01",
                 "ecat.adp": adp,
-                "ecat.ado": "0x0000",
+                "ecat.ado": ado,
                 "ecat.subframe.length": "0x000a",
             },
             "ecat.cnt": wkc,
@@ -60,7 +74,8 @@ class TSharkCaptureToolTests(unittest.TestCase):
                 "ecat_mailbox.counter": "0x01",
                 "ecat_mailbox.coe": {
                     "ecat_mailbox.coe.type": "0x02",
-                    "ecat_mailbox.coe.sdoreq": "0x01",
+                    "ecat_mailbox.coe.sdoreq": sdo_request,
+                    "ecat_mailbox.coe.sdores": sdo_response,
                     "ecat_mailbox.coe.sdoidx": "0x1a00",
                     "ecat_mailbox.coe.sdosub": subindex,
                     "ecat_mailbox.coe.sdodata": "0x60410010",
@@ -302,6 +317,93 @@ class TSharkCaptureToolTests(unittest.TestCase):
         self.assertEqual(result["returned_frames"], [41460])
         self.assertEqual(result["missing_frames"], [41614])
 
+    def test_query_frames_parses_frame_macs_and_command_names(self):
+        packets = [
+            self._packet(
+                41460,
+                [self._sdo_datagram(cmd="0x04")],
+                source_mac="00:11:22:33:44:55",
+                dest_mac="ff:ff:ff:ff:ff:ff",
+            ),
+            self._packet(
+                41461,
+                [self._sdo_datagram(cmd="0xff")],
+                source_mac="00:11:22:33:44:55",
+                dest_mac="ff:ff:ff:ff:ff:ff",
+            ),
+        ]
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps(packets)),
+        ):
+            result = tshark_capture.query_frames("sample.pcapng", [41460, 41461])
+
+        first, second = result["frames"]
+        self.assertEqual(first["source_mac"], "00:11:22:33:44:55")
+        self.assertEqual(first["dest_mac"], "ff:ff:ff:ff:ff:ff")
+        self.assertEqual(first["datagrams"][0]["cmd_name"], "FPRD")
+        self.assertIsNone(second["datagrams"][0]["cmd_name"])
+
+    def test_command_name_maps_numeric_ecat_commands(self):
+        packets = [
+            self._packet(
+                1,
+                [self._sdo_datagram(cmd="0x04"), self._sdo_datagram(cmd="0x05")],
+            )
+        ]
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps(packets)),
+        ):
+            result = tshark_capture.query_frames("sample.pcapng", [1])
+
+        self.assertEqual(
+            [datagram["cmd_name"] for datagram in result["frames"][0]["datagrams"]],
+            ["FPRD", "FPWR"],
+        )
+
+    def test_path_role_requires_original_and_modified_mac_pair(self):
+        packets = [
+            self._packet(
+                500,
+                [self._sdo_datagram(wkc="0x0001")],
+                source_mac="02:11:22:33:44:55",
+            ),
+            self._packet(
+                100,
+                [self._sdo_datagram(wkc="0x0001")],
+                source_mac="00:11:22:33:44:55",
+            ),
+        ]
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps(packets)),
+        ):
+            result = tshark_capture.query_frames("sample.pcapng", [500, 100])
+
+        self.assertEqual(
+            [frame["ethercat_path_role"] for frame in result["frames"]],
+            ["returning", "outgoing"],
+        )
+
+    def test_local_mac_without_original_variant_is_unknown(self):
+        packet = self._packet(
+            500,
+            [self._sdo_datagram()],
+            source_mac="02:11:22:33:44:55",
+        )
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps([packet])),
+        ):
+            result = tshark_capture.query_frames("sample.pcapng", [500])
+
+        self.assertEqual(result["frames"][0]["ethercat_path_role"], "unknown")
+
     def test_query_frames_rejects_invalid_frame_numbers(self):
         invalid_values = [[], [0], [-1], [True], ["41460"], list(range(1, 52))]
         for frame_numbers in invalid_values:
@@ -399,6 +501,51 @@ class TSharkCaptureToolTests(unittest.TestCase):
 
         self.assertEqual(len(result["frames"][0]["datagrams"]), 1)
         self.assertEqual(result["frames"][0]["datagrams"][0]["adp"], "0x0001")
+
+    def test_query_sdo_object_keeps_outgoing_and_returning_sdo_copies(self):
+        packets = [
+            self._packet(
+                41460,
+                [self._sdo_datagram(wkc="0", cmd="0x05")],
+                source_mac="00:18:23:13:02:09",
+            ),
+            self._packet(
+                41461,
+                [self._sdo_datagram(wkc="1", cmd="0x05")],
+                source_mac="02:18:23:13:02:09",
+            ),
+            self._packet(
+                41614,
+                [
+                    self._sdo_datagram(
+                        wkc="1",
+                        cmd="0x04",
+                        ado="0x10c0",
+                        sdo_request=None,
+                        sdo_response="0x01",
+                    )
+                ],
+                source_mac="02:18:23:13:02:09",
+            ),
+        ]
+        with patch.object(
+            tshark_capture.subprocess,
+            "run",
+            return_value=self._completed(json.dumps(packets)),
+        ):
+            result = tshark_capture.query_sdo_object(
+                "sample.pcapng", 0x1A00, 0x01, 41400, 42500
+            )
+
+        self.assertEqual(result["returned_frames"], [41460, 41461, 41614])
+        self.assertEqual(
+            [frame["ethercat_path_role"] for frame in result["frames"]],
+            ["outgoing", "returning", "returning"],
+        )
+        self.assertEqual(
+            [frame["datagrams"][0]["cmd_name"] for frame in result["frames"]],
+            ["FPWR", "FPWR", "FPRD"],
+        )
 
     def test_query_sdo_object_rejects_invalid_arguments(self):
         invalid_arguments = [

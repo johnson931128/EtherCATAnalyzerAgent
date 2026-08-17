@@ -19,6 +19,24 @@ MAX_BATCH_FRAME_COUNT = 50
 TSHARK_TIMEOUT_SECONDS = 60
 JSON_LAYER_SELECTOR = "frame eth ecat ecat_mailbox"
 
+ECAT_COMMAND_NAMES = {
+    0x00: "NOP",
+    0x01: "APRD",
+    0x02: "APWR",
+    0x03: "APRW",
+    0x04: "FPRD",
+    0x05: "FPWR",
+    0x06: "FPRW",
+    0x07: "BRD",
+    0x08: "BWR",
+    0x09: "BRW",
+    0x0A: "LRD",
+    0x0B: "LWR",
+    0x0C: "LRW",
+    0x0D: "ARMW",
+    0x0E: "FRMW",
+}
+
 CAPTURE_FIELD_ALLOWLIST = frozenset(
     {
         "frame.number",
@@ -275,6 +293,17 @@ def _first_field(value: Any, *field_names: str) -> Any:
     return values[0] if values else None
 
 
+def _command_name(value: Any) -> Any:
+    command_value = _as_integer(value)
+    if command_value is not None:
+        return ECAT_COMMAND_NAMES.get(command_value)
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in ECAT_COMMAND_NAMES.values():
+            return normalized
+    return None
+
+
 def _datagram_evidence(
     frame_number: int, datagram_sequence: int, datagram: Dict[str, Any]
 ) -> Dict[str, object]:
@@ -318,6 +347,7 @@ def _datagram_evidence(
         "frame_number": frame_number,
         "datagram_sequence": datagram_sequence,
         "cmd": _first_field(datagram, "ecat.cmd"),
+        "cmd_name": _command_name(_first_field(datagram, "ecat.cmd")),
         "idx": _first_field(datagram, "ecat.idx"),
         "adp": _first_field(datagram, "ecat.adp"),
         "ado": _first_field(datagram, "ecat.ado"),
@@ -348,15 +378,53 @@ def _frame_number(packet: Dict[str, Any]) -> Any:
     return None
 
 
+def _parse_mac_address(value: Any) -> Any:
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if len(parts) != 6 or any(len(part) != 2 for part in parts):
+        return None
+    try:
+        return tuple(int(part, 16) for part in parts)
+    except ValueError:
+        return None
+
+
+def _classify_ethercat_path_roles(frames: List[Dict[str, object]]) -> None:
+    """Classify frame direction only when an original/modified MAC pair is present."""
+    source_macs = {
+        parsed
+        for frame in frames
+        for parsed in [_parse_mac_address(frame.get("source_mac"))]
+        if parsed is not None
+    }
+    role_by_mac = {}
+    for original in source_macs:
+        if original[0] & 0x02:
+            continue
+        modified = (original[0] | 0x02, *original[1:])
+        if modified in source_macs:
+            role_by_mac[original] = "outgoing"
+            role_by_mac[modified] = "returning"
+
+    for frame in frames:
+        parsed = _parse_mac_address(frame.get("source_mac"))
+        frame["ethercat_path_role"] = role_by_mac.get(parsed, "unknown")
+
+
 def _compact_packet(packet: Dict[str, Any]) -> Dict[str, object]:
     frame_number = _frame_number(packet)
     if frame_number is None:
         raise ValueError("TShark packet is missing frame.number")
     source = packet.get("_source")
     layers = source.get("layers") if isinstance(source, dict) else None
+    eth_layer = layers.get("eth") if isinstance(layers, dict) else None
     ecat_layer = layers.get("ecat") if isinstance(layers, dict) else None
     return {
         "frame_number": frame_number,
+        "source_mac": _first_field(eth_layer, "eth.src"),
+        "dest_mac": _first_field(eth_layer, "eth.dst"),
+        "ethercat_path_role": "unknown",
         "datagrams": [
             _datagram_evidence(frame_number, sequence, datagram)
             for sequence, datagram in enumerate(
@@ -432,6 +500,8 @@ def query_frames(capture: str, frame_numbers: List[int]) -> Dict[str, object]:
         compact = _compact_packet(packet)
         compact_by_frame[compact["frame_number"]] = compact
     returned_frames = [frame for frame in requested_frames if frame in compact_by_frame]
+    frames = [compact_by_frame[frame] for frame in returned_frames]
+    _classify_ethercat_path_roles(frames)
     return {
         "capture": capture_name,
         "requested_frames": requested_frames,
@@ -439,7 +509,7 @@ def query_frames(capture: str, frame_numbers: List[int]) -> Dict[str, object]:
         "missing_frames": [
             frame for frame in requested_frames if frame not in compact_by_frame
         ],
-        "frames": [compact_by_frame[frame] for frame in returned_frames],
+        "frames": frames,
     }
 
 
@@ -483,8 +553,15 @@ def query_sdo_object(
         ]
         if matching_datagrams:
             frames.append(
-                {"frame_number": compact["frame_number"], "datagrams": matching_datagrams}
+                {
+                    "frame_number": compact["frame_number"],
+                    "source_mac": compact["source_mac"],
+                    "dest_mac": compact["dest_mac"],
+                    "ethercat_path_role": "unknown",
+                    "datagrams": matching_datagrams,
+                }
             )
+    _classify_ethercat_path_roles(frames)
     return {
         "capture": capture_name,
         "index": object_index,

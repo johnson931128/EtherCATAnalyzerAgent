@@ -57,6 +57,9 @@ Capture query policy:
 - Need original full packet tree -> export_frame_json.
 - Never treat query_capture flat fields as EtherCAT Datagram association proof.
 - Prefer the fewest TShark invocations and avoid repeated PCAP scans.
+- Compact JSON evidence includes frame-level source/destination MAC and a conservative
+  ethercat_path_role; distinguish that path role from CoE SDO request/response fields.
+- Do not infer path direction from WKC, command, frame adjacency, or CoE request/response.
 - Never generate or execute a shell, PowerShell, Python, or arbitrary TShark command.
 
 On every turn return exactly one JSON object and no markdown fences. To request a tool:
