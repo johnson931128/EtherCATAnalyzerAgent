@@ -519,6 +519,50 @@ _SDO_REFERENCE_QUERIES = (
     "source MAC address locally administered frame processing",
     "CoE SDO abort code request response",
 )
+_SDO_REFERENCE_SEARCH_LIMIT = 5
+_SDO_REFERENCE_RELEVANCE_RULES = {
+    _SDO_REFERENCE_QUERIES[0]: (
+        ("working counter", "wkc"),
+        ("ethercat datagram",),
+    ),
+    _SDO_REFERENCE_QUERIES[1]: (
+        ("source mac", "mac address"),
+        ("locally administered", "frame processing"),
+    ),
+    _SDO_REFERENCE_QUERIES[2]: (
+        ("coe", "sdo", "mailbox"),
+        ("request", "response", "abort"),
+    ),
+}
+
+
+def _reference_search_text(match: Dict[str, object]) -> str:
+    heading_path = match.get("heading_path", [])
+    if isinstance(heading_path, (list, tuple)):
+        heading_path = " ".join(str(item) for item in heading_path)
+    return " ".join(
+        str(value)
+        for value in (
+            match.get("heading", ""),
+            heading_path,
+            match.get("excerpt", ""),
+        )
+        if value
+    ).casefold()
+
+
+def _contains_reference_term(text: str, term: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE))
+
+
+def _reference_is_relevant(query: str, match: object) -> bool:
+    if not isinstance(match, dict):
+        return False
+    text = _reference_search_text(match)
+    return all(
+        any(_contains_reference_term(text, term) for term in alternatives)
+        for alternatives in _SDO_REFERENCE_RELEVANCE_RULES[query]
+    )
 
 
 def _build_reference_context() -> List[Dict[str, object]]:
@@ -527,7 +571,10 @@ def _build_reference_context() -> List[Dict[str, object]]:
     references = []
     for query in _SDO_REFERENCE_QUERIES:
         try:
-            matches = search_spec_markdown(query, limit=1)
+            matches = search_spec_markdown(
+                query,
+                limit=_SDO_REFERENCE_SEARCH_LIMIT,
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             references.append(
                 {
@@ -537,10 +584,19 @@ def _build_reference_context() -> List[Dict[str, object]]:
                 }
             )
             continue
-        if not matches:
-            references.append({"query": query, "status": "insufficient"})
+        match = next(
+            (candidate for candidate in matches if _reference_is_relevant(query, candidate)),
+            None,
+        )
+        if match is None:
+            references.append(
+                {
+                    "query": query,
+                    "status": "insufficient",
+                    "reason": "no bounded search result passed relevance validation",
+                }
+            )
             continue
-        match = matches[0]
         references.append(
             {
                 "query": query,

@@ -2,17 +2,6 @@ import argparse
 import json
 from pathlib import Path
 
-from agent.graph import graph
-from core.config import RAW_TSHARK_PATH
-from retrieval.pdf_spec import search_pdf
-from retrieval.raw_capture import find_first_coe_sdo_packet
-from retrieval.result_document import build_result_document
-from retrieval.sdo_verification import is_sdo_transaction_input
-from retrieval.source_retrieval import search_source, select_source_with_llm
-from retrieval.spec_retrieval import plan_spec_queries, select_spec_with_llm
-from workflows.spec_ingestion import ingest_spec
-
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 TASK_PATH = PROJECT_ROOT / "task.md"
 RESULT_PATH = PROJECT_ROOT / "result.md"
@@ -54,6 +43,10 @@ def append_build_docs_result(existing, report):
 
 def run_task(task, use_tool_agent=False):
     """Run one task through the existing graph and persist its result."""
+    from agent.graph import graph
+    from retrieval.result_document import build_result_document
+    from retrieval.sdo_verification import is_sdo_transaction_input
+
     graph_input = {"task": task}
     if is_sdo_transaction_input(task) or use_tool_agent:
         graph_input["route_mode"] = "tool_agent"
@@ -69,6 +62,8 @@ def run_task(task, use_tool_agent=False):
 
 def print_source_results(query):
     """Print compact deterministic source matches for one CLI query."""
+    from retrieval.source_retrieval import search_source
+
     results = search_source(query)
     if not results:
         print(f"No C# source matches found for: {query}")
@@ -84,6 +79,8 @@ def print_source_results(query):
 
 def print_source_ai_results(task):
     """Print only Qwen's selected source paths."""
+    from retrieval.source_retrieval import select_source_with_llm
+
     result = select_source_with_llm(task)
     for path in result["selected_paths"]:
         print(path)
@@ -91,6 +88,8 @@ def print_source_ai_results(task):
 
 def print_spec_results(query):
     """Print up to eight ET1100 PDF matches for one CLI query."""
+    from retrieval.pdf_spec import search_pdf
+
     results = search_pdf([query])
     print(f"ET1100 matches for: {query}")
     if not results:
@@ -106,6 +105,8 @@ def print_spec_results(query):
 
 def print_spec_ai_results(task):
     """Print selected ET1100 PDF pages with short excerpts only."""
+    from retrieval.spec_retrieval import select_spec_with_llm
+
     result = select_spec_with_llm(task)
     selected_pages = result["selected_pages"]
     page_texts = result["page_texts"]
@@ -124,6 +125,8 @@ def print_spec_ai_results(task):
 
 def print_spec_plan_results(task):
     """Print Qwen's ET1100 specification queries."""
+    from retrieval.spec_retrieval import plan_spec_queries
+
     queries = plan_spec_queries(task)
     print("Spec queries:")
     for index, query in enumerate(queries, start=1):
@@ -132,6 +135,9 @@ def print_spec_plan_results(task):
 
 def print_raw_coe_sdo_result():
     """Print only the first raw CoE SDO packet match."""
+    from core.config import RAW_TSHARK_PATH
+    from retrieval.raw_capture import find_first_coe_sdo_packet
+
     result = find_first_coe_sdo_packet(RAW_TSHARK_PATH)
     if result is None:
         print("No CoE SDO packet found.")
@@ -153,6 +159,8 @@ def print_raw_coe_sdo_result():
 
 def print_spec_ingest_result(spec_name):
     """Run Docling PDF-to-Markdown ingestion for one specification."""
+    from workflows.spec_ingestion import ingest_spec
+
     manifest = ingest_spec(spec_name)
     print(f"Ingested specification: {manifest['spec']}")
     print(f"Source PDF: {manifest['source_relative_path']}")
@@ -161,9 +169,24 @@ def print_spec_ingest_result(spec_name):
     print("Conversion completed.")
 
 
+def print_startup_diagnostics():
+    """Print the lightweight capture-related runtime configuration."""
+    from core.config import (
+        CAPTURE_INPUT_ROOT,
+        DEFAULT_CAPTURE_NAME,
+        TSHARK_EXECUTABLE,
+    )
+
+    default_capture = DEFAULT_CAPTURE_NAME or "Not configured"
+    print(f"Capture root: {CAPTURE_INPUT_ROOT}")
+    print(f"Default capture: {default_capture}")
+    print(f"TShark: {TSHARK_EXECUTABLE}")
+
+
 def interactive_cli():
     """Run the persistent command-line interface."""
     print("EtherCAT Analyzer Agent")
+    print_startup_diagnostics()
     print("Type /help for commands.\n")
 
     while True:
