@@ -1,9 +1,11 @@
 """Deterministic SDO transaction verification primitives."""
 
+import json
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from core import config
+from core.llm import llm
 from retrieval.tshark_capture import query_frames
 
 
@@ -147,9 +149,78 @@ def parse_sdo_transaction_claims(text: Any) -> List[Dict[str, object]]:
     return claims
 
 
-def is_sdo_transaction_input(text: Any) -> bool:
-    """Return whether text uses the supported DLL SDO claim marker."""
+def contains_sdo_transaction_data(text: Any) -> bool:
+    """Return whether text contains the DLL SDO transaction marker."""
     return isinstance(text, str) and bool(_TRANSACTION_START.search(text))
+
+
+def is_sdo_transaction_input(text: Any) -> bool:
+    """Backward-compatible alias for structured SDO content detection."""
+    return contains_sdo_transaction_data(text)
+
+
+_EXPLICIT_VERIFY_LINES = frozenset({"verify", "verify sdo"})
+
+
+def is_explicit_sdo_verification(text: Any) -> bool:
+    """Return whether the first non-empty line explicitly requests verification."""
+    if not isinstance(text, str):
+        return False
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return first_line.casefold() in _EXPLICIT_VERIFY_LINES
+
+
+def remove_explicit_sdo_verification_prefix(text: str) -> str:
+    """Remove the first-line verify control from a task before claim parsing."""
+    if not is_explicit_sdo_verification(text):
+        return text
+    lines = text.splitlines()
+    first_content = next(
+        index for index, line in enumerate(lines) if line.strip()
+    )
+    return "\n".join(lines[first_content + 1:]).lstrip("\r\n")
+
+
+SDO_INTENTS = frozenset({"sdo_verification", "explanation", "unclear"})
+_SDO_INTENT_PROMPT = """You only classify the user's intent for text that contains structured EtherCAT SDO Analyzer output.
+
+Choose exactly one:
+- sdo_verification: the user asks to verify, validate, check correctness, confirm whether Analyzer results are correct, or compare claims against capture evidence.
+- explanation: the user asks what the output means, asks for interpretation, teaching, discussion, or another engineering question without asking for independent verification.
+- unclear: the text contains SDO transaction output but does not state what action the user wants.
+
+Examples:
+- "Please verify these SDO transactions" -> sdo_verification
+- "What do these three outputs mean?" -> explanation
+- only SDO transaction output with no request -> unclear
+
+Return only this JSON schema and no tool call:
+{"intent":"sdo_verification|explanation|unclear"}
+
+User text:
+"""
+
+
+def _parse_sdo_intent(content: Any) -> str:
+    if not isinstance(content, str):
+        raise ValueError("SDO intent response must be a JSON string")
+    parsed = json.loads(content.strip())
+    if (
+        not isinstance(parsed, dict)
+        or set(parsed) != {"intent"}
+        or parsed["intent"] not in SDO_INTENTS
+    ):
+        raise ValueError("SDO intent response must contain one supported intent")
+    return parsed["intent"]
+
+
+def classify_sdo_intent(text: str) -> str:
+    """Classify SDO user intent without performing protocol analysis."""
+    try:
+        response = llm.invoke(_SDO_INTENT_PROMPT + text.strip())
+        return _parse_sdo_intent(response.content)
+    except Exception:
+        return "unclear"
 
 
 def extract_capture_name(text: str) -> Optional[str]:
@@ -639,7 +710,9 @@ def build_sdo_verification_context(
     active_capture: Optional[str] = None,
 ) -> Optional[Dict[str, object]]:
     """Build the deterministic context handed to the explanation agent."""
-    if not is_sdo_transaction_input(user_question):
+    if is_explicit_sdo_verification(user_question):
+        user_question = remove_explicit_sdo_verification_prefix(user_question)
+    if not contains_sdo_transaction_data(user_question):
         return None
 
     reference_context = _build_reference_context()

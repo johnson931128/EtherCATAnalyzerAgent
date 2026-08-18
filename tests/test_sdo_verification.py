@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from core import config
 from retrieval import sdo_verification
@@ -102,6 +103,77 @@ class SDOVerificationTests(unittest.TestCase):
         claims = sdo_verification.parse_sdo_transaction_claims(text)
         self.assertEqual(len(claims), 2)
         self.assertEqual(claims[1]["claimed_abort_code"], 0x05040005)
+
+    def test_structured_data_detector_is_separate_from_explicit_intent(self):
+        self.assertTrue(
+            sdo_verification.contains_sdo_transaction_data(
+                "Configured Slave Address: 0x0001"
+            )
+        )
+        self.assertFalse(
+            sdo_verification.is_explicit_sdo_verification(
+                "Please verify this\nConfigured Slave Address: 0x0001"
+            )
+        )
+        self.assertTrue(sdo_verification.is_explicit_sdo_verification("VERIFY SDO\n"))
+
+    def test_explicit_verify_prefix_is_removed_before_claim_parsing(self):
+        task = "verify\n\n" + (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        stripped = sdo_verification.remove_explicit_sdo_verification_prefix(task)
+        self.assertFalse(stripped.casefold().startswith("verify"))
+        self.assertTrue(stripped.startswith("Configured Slave Address:"))
+
+    def test_context_removes_explicit_verify_before_parser(self):
+        claims_text = (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        with patch.object(
+            sdo_verification,
+            "_build_reference_context",
+            return_value=[],
+        ), patch.object(
+            sdo_verification,
+            "parse_sdo_transaction_claims",
+            return_value=[REQUEST_CLAIM],
+        ) as parse_claims, patch.object(
+            sdo_verification,
+            "verify_sdo_transactions",
+            return_value=[],
+        ):
+            context = sdo_verification.build_sdo_verification_context(
+                "verify\n" + claims_text
+            )
+
+        parse_claims.assert_called_once_with(claims_text)
+        self.assertEqual(context["parsed_claims"], [REQUEST_CLAIM])
+
+    def test_sdo_intent_classifier_accepts_only_supported_enum(self):
+        response = type("Response", (), {"content": '{"intent":"explanation"}'})()
+        client = SimpleNamespace(invoke=Mock(return_value=response))
+        with patch.object(sdo_verification.llm, "_client", client):
+            intent = sdo_verification.classify_sdo_intent(
+                "What do these SDO outputs mean?\nConfigured Slave Address: ..."
+            )
+
+        self.assertEqual(intent, "explanation")
+        client.invoke.assert_called_once()
+
+    def test_invalid_sdo_intent_response_is_unclear(self):
+        response = type("Response", (), {"content": '{"intent":"tool_call"}'})()
+        client = SimpleNamespace(invoke=Mock(return_value=response))
+        with patch.object(sdo_verification.llm, "_client", client):
+            self.assertEqual(
+                sdo_verification.classify_sdo_intent(
+                    "Configured Slave Address: ..."
+                ),
+                "unclear",
+            )
 
     def test_planner_deduplicates_frames_for_one_query(self):
         second_claim = dict(REQUEST_CLAIM, request_frame=41460, response_frame=41791)

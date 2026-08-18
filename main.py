@@ -47,10 +47,9 @@ def run_task(task, use_tool_agent=False, capture=None):
     """Run one task through the existing graph and persist its result."""
     from agent.graph import graph
     from retrieval.result_document import build_result_document
-    from retrieval.sdo_verification import is_sdo_transaction_input
 
     graph_input = {"task": task, "active_capture": capture}
-    if is_sdo_transaction_input(task) or use_tool_agent:
+    if use_tool_agent:
         graph_input["route_mode"] = "tool_agent"
     graph_result = graph.invoke(graph_input)
     if graph_result.get("task_type") == "build_docs":

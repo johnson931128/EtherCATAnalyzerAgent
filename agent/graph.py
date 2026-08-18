@@ -107,10 +107,15 @@ def is_build_docs_task(task: str) -> bool:
 
 
 def route_task(state: AgentState) -> str:
-    from retrieval.sdo_verification import is_sdo_transaction_input
+    from retrieval.sdo_verification import (
+        contains_sdo_transaction_data,
+        is_explicit_sdo_verification,
+    )
     from workflows.result_check import is_result_check_task
 
-    if is_sdo_transaction_input(state["task"]):
+    if is_explicit_sdo_verification(state["task"]):
+        return "tool_agent"
+    if contains_sdo_transaction_data(state["task"]):
         return "tool_agent"
     if is_build_docs_task(state["task"]):
         return "build_docs"

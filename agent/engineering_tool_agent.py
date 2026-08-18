@@ -16,7 +16,13 @@ from retrieval.pdf_spec import (
     search_spec_raw,
 )
 from retrieval.raw_capture import find_first_coe_sdo_packet
-from retrieval.sdo_verification import build_sdo_verification_context
+from retrieval.sdo_verification import (
+    build_sdo_verification_context,
+    classify_sdo_intent,
+    contains_sdo_transaction_data,
+    is_explicit_sdo_verification,
+    remove_explicit_sdo_verification_prefix,
+)
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
     export_frame_json,
@@ -442,20 +448,62 @@ def _run_sdo_verification_agent(task: str, context: Dict[str, object]):
     }
 
 
+def _sdo_routing_error(message: str) -> Dict[str, object]:
+    return {
+        "result": message,
+        "capture_mode": "tool_agent",
+        "task_type": "analysis",
+        "tools_used": [],
+    }
+
+
 def run_engineering_tool_agent(state: AgentState):
     """Run Qwen with at most MAX_TOOL_CALLS deterministic tool executions."""
-    verification_context = build_sdo_verification_context(
-        state["task"], active_capture=state.get("active_capture")
-    )
-    if verification_context is not None:
-        return _run_sdo_verification_agent(state["task"], verification_context)
+    task = state["task"]
+    active_capture = state.get("active_capture")
+    explicit_verify = is_explicit_sdo_verification(task)
+    verification_task = remove_explicit_sdo_verification_prefix(task)
+
+    if explicit_verify:
+        if not contains_sdo_transaction_data(verification_task):
+            return _sdo_routing_error(
+                "Explicit SDO verification requested, but no SDO transaction "
+                "structured data was found."
+            )
+        verification_context = build_sdo_verification_context(
+            verification_task, active_capture=active_capture
+        )
+        if not verification_context or not verification_context.get("parsed_claims"):
+            return _sdo_routing_error(
+                "Explicit SDO verification requested, but the SDO transaction "
+                "structured data is invalid or incomplete."
+            )
+        return _run_sdo_verification_agent(task, verification_context)
+
+    if contains_sdo_transaction_data(task):
+        intent = classify_sdo_intent(task)
+        if intent == "sdo_verification":
+            verification_context = build_sdo_verification_context(
+                task, active_capture=active_capture
+            )
+            if not verification_context or not verification_context.get("parsed_claims"):
+                return _sdo_routing_error(
+                    "SDO verification was requested, but the SDO transaction "
+                    "structured data is invalid or incomplete."
+                )
+            return _run_sdo_verification_agent(task, verification_context)
+        if intent == "unclear":
+            return _sdo_routing_error(
+                "Detected SDO transaction output, but the requested action is unclear. "
+                "Ask me to verify it or describe what you want to know."
+            )
 
     tools_used: List[str] = []
     evidence: List[str] = []
     cached_results: Dict[object, str] = {}
     tool_call_count = 0
     agent_turn_count = 0
-    prompt = _agent_prompt(state["task"], evidence)
+    prompt = _agent_prompt(task, evidence)
 
     while tool_call_count < MAX_TOOL_CALLS and agent_turn_count < MAX_AGENT_TURNS:
         agent_turn_count += 1
@@ -464,7 +512,7 @@ def run_engineering_tool_agent(state: AgentState):
             action = _parse_action(response.content)
         except ValueError as exc:
             evidence.append(json.dumps({"protocol_error": str(exc)}))
-            prompt = _agent_prompt(state["task"], evidence, force_final=True)
+            prompt = _agent_prompt(task, evidence, force_final=True)
             break
 
         if action["action"] == "final":
@@ -495,13 +543,13 @@ def run_engineering_tool_agent(state: AgentState):
 
         evidence.append(f"Tool: {display}\nResult: {result}")
         prompt = _agent_prompt(
-            state["task"], evidence, force_final=tool_call_count >= MAX_TOOL_CALLS
+            task, evidence, force_final=tool_call_count >= MAX_TOOL_CALLS
         )
 
         if tool_call_count >= MAX_TOOL_CALLS:
             break
 
-    final_response = llm.invoke(_agent_prompt(state["task"], evidence, force_final=True))
+    final_response = llm.invoke(_agent_prompt(task, evidence, force_final=True))
     try:
         final_action = _parse_action(final_response.content)
         if final_action["action"] != "final":
