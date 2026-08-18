@@ -154,7 +154,7 @@ Start from the repository root with:
 .\run.ps1
 ```
 
-The current CLI commands are `/help`, `/read task.md`, `/source`, `/source-ai`, `/spec`, `/spec-ai`, `/spec-plan`, `/ingest-spec ET1100`, `/raw-coe-sdo`, and `/exit`. Plain text uses the bounded tool-agent route. `run.ps1` expects the existing local Python environment, `HermesProxy.py`, and a healthy proxy at `http://127.0.0.1:5000/health`.
+The current CLI commands include `/help`, `/read task.md`, `/captures`, `/capture <filename>`, `/source`, `/source-ai`, `/spec`, `/spec-ai`, `/spec-plan`, `/ingest-spec ET1100`, `/raw-coe-sdo`, and `/exit`. Plain text uses the bounded tool-agent route. `run.ps1` expects the existing local Python environment, `HermesProxy.py`, and a healthy proxy at `http://127.0.0.1:5000/health`.
 
 ## Configuration
 
@@ -171,12 +171,16 @@ For DLL SDO verification, set an optional default logical capture filename when
 the pasted DLL output does not name a capture:
 
 ```powershell
-$env:DEFAULT_CAPTURE_NAME="PowerOn.pcapng"
+$env:DEFAULT_CAPTURE_NAME="<logical-capture>.pcapng"
 ```
 
-`CAPTURE_INPUT_ROOT` determines the capture directory. `DEFAULT_CAPTURE_NAME`
-determines the logical capture filename used by DLL verification when neither
-an explicit argument nor a filename in the task is available.
+`local.settings.example.ps1` shows the machine-specific environment settings used
+by `run.ps1`; copy it to `local.settings.ps1` and adjust the paths locally. The
+local file is ignored by Git. PCAP selection is session-only: `/captures` lists
+direct child `.pcap` and `.pcapng` files, and `/capture <filename>` selects the
+active capture for deterministic SDO verification. Capture precedence is explicit
+argument, task filename, active CLI capture, `DEFAULT_CAPTURE_NAME`, then
+INCONCLUSIVE.
 
 The primary ET1100 retrieval path reads `spec/generated/ET1100/ET1100.md`. Raw
 fallback retrieval resolves exactly one PDF in `spec/original/ET1100/`; no

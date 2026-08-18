@@ -211,7 +211,9 @@ class SDOVerificationTests(unittest.TestCase):
         )
         self.assertEqual(context["capture"], "sample.pcapng")
 
-    def _build_context_with_capture(self, text, capture=None, default=None):
+    def _build_context_with_capture(
+        self, text, capture=None, active_capture=None, default=None
+    ):
         with patch.object(config, "DEFAULT_CAPTURE_NAME", default), patch.object(
             sdo_verification,
             "_build_reference_context",
@@ -222,7 +224,7 @@ class SDOVerificationTests(unittest.TestCase):
             return_value=[],
         ) as verify:
             context = sdo_verification.build_sdo_verification_context(
-                text, capture=capture
+                text, capture=capture, active_capture=active_capture
             )
         return context, verify
 
@@ -234,7 +236,7 @@ class SDOVerificationTests(unittest.TestCase):
             "Success: True, Abort Code: N/A"
         )
         context, verify = self._build_context_with_capture(
-            text, default="default.pcapng"
+            text, active_capture="active.pcapng", default="default.pcapng"
         )
         self.assertEqual(context["capture"], "task.pcapng")
         verify.assert_called_once_with(context["parsed_claims"], "task.pcapng")
@@ -259,10 +261,25 @@ class SDOVerificationTests(unittest.TestCase):
             "Success: True, Abort Code: N/A"
         )
         context, verify = self._build_context_with_capture(
-            text, capture="explicit.pcapng", default="default.pcapng"
+            text,
+            capture="explicit.pcapng",
+            active_capture="active.pcapng",
+            default="default.pcapng",
         )
         self.assertEqual(context["capture"], "explicit.pcapng")
         verify.assert_called_once_with(context["parsed_claims"], "explicit.pcapng")
+
+    def test_context_active_capture_precedes_default_without_task_capture(self):
+        text = (
+            "Configured Slave Address: 0x0001, Object: 0x1A00:01, "
+            "Data: 0x60410010, Request Frame: 41460, Response Frame: 41614, "
+            "Success: True, Abort Code: N/A"
+        )
+        context, active_verify = self._build_context_with_capture(
+            text, active_capture="active.pcapng", default="default.pcapng"
+        )
+        self.assertEqual(context["capture"], "active.pcapng")
+        active_verify.assert_called_once_with(context["parsed_claims"], "active.pcapng")
 
     def test_context_invalid_default_is_inconclusive(self):
         text = (
@@ -290,7 +307,6 @@ class SDOVerificationTests(unittest.TestCase):
             ["capture logical filename is missing"],
         )
         verify.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

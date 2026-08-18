@@ -1,5 +1,13 @@
 $root = Split-Path -Parent $PSScriptRoot
 
+$settings = Join-Path $PSScriptRoot "local.settings.ps1"
+if (Test-Path $settings) {
+    . $settings
+}
+else {
+    Write-Host "Local settings: Not found"
+}
+
 $python = Join-Path $root ".venv\Scripts\python.exe"
 $proxy = Join-Path $root "HermesProxy.py"
 $agent = Join-Path $PSScriptRoot "main.py"

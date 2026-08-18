@@ -12,6 +12,7 @@ env/
 .env
 .env.*
 *.key
+local.settings.ps1
 
 # IDE
 .vscode/

@@ -15,6 +15,8 @@ HELP_TEXT = """Commands:
   /spec-plan TASK Ask Qwen to plan ET1100 specification queries
   /ingest-spec NAME  Convert the single local specification PDF with Docling
   /raw-coe-sdo    Find the first raw CoE SDO packet
+  /captures       List available capture files
+  /capture <filename>  Set the active capture for this session
   /help          Show this help
   /exit          Exit the Agent
 
@@ -41,13 +43,13 @@ def append_build_docs_result(existing, report):
     )
 
 
-def run_task(task, use_tool_agent=False):
+def run_task(task, use_tool_agent=False, capture=None):
     """Run one task through the existing graph and persist its result."""
     from agent.graph import graph
     from retrieval.result_document import build_result_document
     from retrieval.sdo_verification import is_sdo_transaction_input
 
-    graph_input = {"task": task}
+    graph_input = {"task": task, "active_capture": capture}
     if is_sdo_transaction_input(task) or use_tool_agent:
         graph_input["route_mode"] = "tool_agent"
     graph_result = graph.invoke(graph_input)
@@ -173,18 +175,65 @@ def print_startup_diagnostics():
     """Print the lightweight capture-related runtime configuration."""
     from core.config import (
         CAPTURE_INPUT_ROOT,
-        DEFAULT_CAPTURE_NAME,
         TSHARK_EXECUTABLE,
     )
 
-    default_capture = DEFAULT_CAPTURE_NAME or "Not configured"
     print(f"Capture root: {CAPTURE_INPUT_ROOT}")
-    print(f"Default capture: {default_capture}")
+    print("Active capture: Not selected")
     print(f"TShark: {TSHARK_EXECUTABLE}")
+
+
+def list_available_captures(capture_root=None):
+    """Return direct child PCAP files in deterministic order."""
+    if capture_root is None:
+        from core.config import CAPTURE_INPUT_ROOT
+
+        capture_root = CAPTURE_INPUT_ROOT
+    root = Path(capture_root)
+    if not root.is_dir():
+        raise FileNotFoundError(f"Capture root not found: {root}")
+    return sorted(
+        (
+            path.name
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.casefold() in {".pcap", ".pcapng"}
+        ),
+        key=lambda name: (name.casefold(), name),
+    )
+
+
+def print_captures():
+    """Print available direct child capture files."""
+    from core.config import CAPTURE_INPUT_ROOT
+
+    try:
+        captures = list_available_captures(CAPTURE_INPUT_ROOT)
+    except OSError as exc:
+        print(str(exc))
+        return
+
+    print("Available captures:")
+    for index, capture in enumerate(captures, start=1):
+        print(f"{index}. {capture}")
+
+
+def validate_active_capture(filename):
+    """Validate and resolve an existing logical capture filename."""
+    from retrieval.tshark_capture import resolve_capture_path, validate_capture_name
+
+    normalized = validate_capture_name(filename)
+    resolve_capture_path(normalized)
+    return normalized
+
+
+def set_active_capture(filename):
+    """Validate one existing capture and return its session value."""
+    return validate_active_capture(filename)
 
 
 def interactive_cli():
     """Run the persistent command-line interface."""
+    active_capture = None
     print("EtherCAT Analyzer Agent")
     print_startup_diagnostics()
     print("Type /help for commands.\n")
@@ -204,6 +253,20 @@ def interactive_cli():
             break
         if command == "/help":
             print(HELP_TEXT)
+            continue
+        if command == "/captures":
+            print_captures()
+            continue
+        if command.startswith("/capture"):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) != 2 or parts[0].casefold() != "/capture":
+                print("Usage: /capture <filename>")
+                continue
+            try:
+                active_capture = set_active_capture(parts[1].strip())
+                print(f"Active capture: {active_capture}")
+            except (OSError, ValueError) as exc:
+                print(f"Capture rejected: {exc}")
             continue
         if command == "/raw-coe-sdo":
             try:
@@ -281,7 +344,11 @@ def interactive_cli():
             task = user_input
 
         try:
-            graph_result = run_task(task, use_tool_agent=not user_input.startswith("/"))
+            graph_result = run_task(
+                task,
+                use_tool_agent=not user_input.startswith("/"),
+                capture=active_capture,
+            )
             for tool_name in graph_result.get("tools_used", []):
                 print(f"Tool: {tool_name}")
             print(f"Completed. Result written to {RESULT_PATH}")

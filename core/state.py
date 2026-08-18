@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 
 class AgentState(TypedDict):
@@ -20,3 +20,4 @@ class AgentState(TypedDict):
     generated_file_status: str
     tools_used: list
     verification_context: dict
+    active_capture: Optional[str]

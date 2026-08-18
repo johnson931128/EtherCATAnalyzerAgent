@@ -444,7 +444,9 @@ def _run_sdo_verification_agent(task: str, context: Dict[str, object]):
 
 def run_engineering_tool_agent(state: AgentState):
     """Run Qwen with at most MAX_TOOL_CALLS deterministic tool executions."""
-    verification_context = build_sdo_verification_context(state["task"])
+    verification_context = build_sdo_verification_context(
+        state["task"], active_capture=state.get("active_capture")
+    )
     if verification_context is not None:
         return _run_sdo_verification_agent(state["task"], verification_context)
 

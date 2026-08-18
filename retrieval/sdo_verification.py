@@ -636,6 +636,7 @@ def _inconclusive_result(claim: Dict[str, object], reason: str):
 def build_sdo_verification_context(
     user_question: str,
     capture: Optional[str] = None,
+    active_capture: Optional[str] = None,
 ) -> Optional[Dict[str, object]]:
     """Build the deterministic context handed to the explanation agent."""
     if not is_sdo_transaction_input(user_question):
@@ -661,7 +662,7 @@ def build_sdo_verification_context(
         else:
             capture_name = extract_capture_name(user_question)
             if capture_name is None:
-                capture_name = config.DEFAULT_CAPTURE_NAME
+                capture_name = active_capture or config.DEFAULT_CAPTURE_NAME
         if capture_name is None or not str(capture_name).strip():
             raise ValueError("capture logical filename is missing")
         from retrieval.tshark_capture import validate_capture_name

@@ -31,12 +31,11 @@ class CliStartupTests(unittest.TestCase):
         self.assertIn("[]", result.stdout)
         self.assertNotIn("fitz API is deprecated", result.stderr)
 
-    def test_startup_diagnostics_show_configured_default_capture(self):
+    def test_startup_diagnostics_show_runtime_capture_state(self):
         env = os.environ.copy()
         env.update(
             {
                 "CAPTURE_INPUT_ROOT": r"D:\EtherCATAnalyzer\Data\Pcap",
-                "DEFAULT_CAPTURE_NAME": "PowerOn.pcapng",
                 "TSHARK_EXECUTABLE": r"C:\WiresharkPortable64\App\Wireshark\tshark.exe",
             }
         )
@@ -44,19 +43,20 @@ class CliStartupTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(r"Capture root: D:\EtherCATAnalyzer\Data\Pcap", result.stdout)
-        self.assertIn("Default capture: PowerOn.pcapng", result.stdout)
+        self.assertIn("Active capture: Not selected", result.stdout)
         self.assertIn(
             r"TShark: C:\WiresharkPortable64\App\Wireshark\tshark.exe",
             result.stdout,
         )
 
-    def test_startup_diagnostics_show_unconfigured_default_capture(self):
+    def test_startup_diagnostics_do_not_display_default_capture(self):
         env = os.environ.copy()
-        env.pop("DEFAULT_CAPTURE_NAME", None)
+        env["DEFAULT_CAPTURE_NAME"] = "PowerOn.pcapng"
         result = self._run_python("import main; main.print_startup_diagnostics()", env)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Default capture: Not configured", result.stdout)
+        self.assertIn("Active capture: Not selected", result.stdout)
+        self.assertNotIn("Default capture:", result.stdout)
 
 
 if __name__ == "__main__":
