@@ -28,6 +28,96 @@ class SDORoutingTests(unittest.TestCase):
     def _state(self, task):
         return {"task": task, "active_capture": "active.pcapng"}
 
+    def test_explicit_sdo_object_query_uses_one_deterministic_query(self):
+        query_result = {
+            "capture": "active.pcapng",
+            "index": 0x1A00,
+            "subindex": 2,
+            "frames": [],
+        }
+        task = "幫我查目前封包中 0x1A00:02 的 SDO 操作"
+        with patch.object(
+            engineering_tool_agent,
+            "query_sdo_object",
+            return_value=query_result,
+        ) as query, patch.object(
+            engineering_tool_agent,
+            "find_first_coe_sdo_packet",
+        ) as find_first, patch.object(
+            engineering_tool_agent,
+            "_run_sdo_object_query_agent",
+            return_value={"result": "explained"},
+        ) as explain:
+            result = engineering_tool_agent.run_engineering_tool_agent(
+                self._state(task)
+            )
+
+        query.assert_called_once_with(
+            capture="active.pcapng",
+            index=6656,
+            subindex=2,
+            frame_start=None,
+            frame_end=None,
+        )
+        find_first.assert_not_called()
+        explain.assert_called_once()
+        self.assertEqual(result, {"result": "explained"})
+
+    def test_wkc_abort_object_query_uses_integer_arguments(self):
+        task = "幫我看 0x1A00:02 的 WKC 跟 abort"
+        with patch.object(
+            engineering_tool_agent,
+            "query_sdo_object",
+            return_value={"frames": []},
+        ) as query, patch.object(
+            engineering_tool_agent,
+            "_run_sdo_object_query_agent",
+            return_value={"result": "explained"},
+        ):
+            engineering_tool_agent.run_engineering_tool_agent(self._state(task))
+
+        arguments = query.call_args.kwargs
+        self.assertIs(type(arguments["index"]), int)
+        self.assertIs(type(arguments["subindex"]), int)
+        self.assertEqual(arguments["index"], 0x1A00)
+        self.assertEqual(arguments["subindex"], 2)
+        self.assertEqual(query.call_count, 1)
+
+    def test_object_explanation_does_not_use_capture_query(self):
+        client = SimpleNamespace(
+            invoke=Mock(
+                return_value=SimpleNamespace(
+                    content='{"action":"final","answer":"explained"}'
+                )
+            )
+        )
+        with patch.object(
+            engineering_tool_agent,
+            "query_sdo_object",
+        ) as query, patch.object(
+            engineering_tool_agent,
+            "find_first_coe_sdo_packet",
+        ) as find_first, patch.object(
+            engineering_tool_agent.llm,
+            "_client",
+            client,
+        ):
+            result = engineering_tool_agent.run_engineering_tool_agent(
+                self._state("0x1A00:02 是什麼意思？")
+            )
+
+        query.assert_not_called()
+        find_first.assert_not_called()
+        self.assertEqual(result["result"], "explained")
+
+    def test_object_query_without_active_capture_returns_clear_message(self):
+        state = {"task": "幫我查 0x1A00:02 的 request frame", "active_capture": None}
+        with patch.object(engineering_tool_agent, "query_sdo_object") as query:
+            result = engineering_tool_agent.run_engineering_tool_agent(state)
+
+        query.assert_not_called()
+        self.assertIn("No active capture selected", result["result"])
+
     def test_explicit_verify_bypasses_intent_classifier_and_strips_control_line(self):
         context = {"parsed_claims": [{"request_frame": 41460}]}
         for prefix in ("verify", "verify sdo"):

@@ -111,9 +111,12 @@ def route_task(state: AgentState) -> str:
         contains_sdo_transaction_data,
         is_explicit_sdo_verification,
     )
+    from retrieval.sdo_query import is_sdo_object_capture_query
     from workflows.result_check import is_result_check_task
 
     if is_explicit_sdo_verification(state["task"]):
+        return "tool_agent"
+    if is_sdo_object_capture_query(state["task"]):
         return "tool_agent"
     if contains_sdo_transaction_data(state["task"]):
         return "tool_agent"

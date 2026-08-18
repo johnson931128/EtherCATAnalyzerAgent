@@ -16,6 +16,10 @@ from retrieval.sdo_verification import (
     is_explicit_sdo_verification,
     remove_explicit_sdo_verification_prefix,
 )
+from retrieval.sdo_query import (
+    extract_sdo_object_reference,
+    is_sdo_object_capture_query,
+)
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
     export_frame_json,
@@ -464,6 +468,66 @@ def _sdo_routing_error(message: str) -> Dict[str, object]:
     }
 
 
+def _sdo_object_query_prompt(
+    task: str, query_result: Dict[str, object]
+) -> str:
+    return (
+        "You explain deterministic EtherCAT SDO object query evidence.\n"
+        "Python has already parsed the hexadecimal object reference and executed "
+        "exactly one bounded query_sdo_object call. The JSON below is authoritative. "
+        "Do not call tools, select captures, build filters, infer missing request/"
+        "response pairing, or invent values. Report the returned frame number(s), "
+        "EtherCAT path role, ADP/station evidence, index/subindex, request/response "
+        "fields, data, WKC, and abort code when those fields are present. If the "
+        "deterministic result does not distinguish a value, say it is not available.\n"
+        "Return exactly one JSON object: "
+        '{"action":"final","answer":"<concise explanation>"}.\n\n'
+        "User request:\n"
+        + task.strip()
+        + "\n\nDeterministic query result:\n"
+        + json.dumps(query_result, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _run_sdo_object_query_agent(
+    task: str, query_result: Dict[str, object], tool_display: str
+) -> Dict[str, object]:
+    try:
+        response = llm.invoke(_sdo_object_query_prompt(task, query_result))
+        action = _parse_action(response.content)
+        if action["action"] != "final":
+            raise ValueError("SDO object explanation must be a final answer")
+        answer = action["answer"]
+    except Exception:
+        answer = json.dumps(query_result, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "result": answer,
+        "capture_mode": "tool_agent",
+        "task_type": "analysis",
+        "tools_used": [tool_display],
+    }
+
+
+def _run_sdo_object_query(
+    task: str, active_capture: str, reference: Dict[str, int]
+) -> Dict[str, object]:
+    arguments = {
+        "capture": active_capture,
+        "index": reference["index"],
+        "subindex": reference["subindex"],
+        "frame_start": None,
+        "frame_end": None,
+    }
+    tool_display = _tool_display("query_sdo_object", arguments)
+    try:
+        query_result = _query_sdo_object_tool(arguments)
+    except (LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        return _sdo_routing_error(str(exc))
+    if not isinstance(query_result, dict):
+        return _sdo_routing_error("SDO object query returned an invalid result.")
+    return _run_sdo_object_query_agent(task, query_result, tool_display)
+
+
 def run_engineering_tool_agent(state: AgentState):
     """Run Qwen with at most MAX_TOOL_CALLS deterministic tool executions."""
     task = state["task"]
@@ -506,6 +570,18 @@ def run_engineering_tool_agent(state: AgentState):
             )
 
     tools_used: List[str] = []
+    if not contains_sdo_transaction_data(task) and is_sdo_object_capture_query(task):
+        if not active_capture:
+            return _sdo_routing_error(
+                "No active capture selected. Use /capture <filename> first."
+            )
+        reference = extract_sdo_object_reference(task)
+        if reference is None:
+            return _sdo_routing_error(
+                "The SDO object reference must be a single valid 0x<index>:<subindex>."
+            )
+        return _run_sdo_object_query(task, active_capture, reference)
+
     evidence: List[str] = []
     cached_results: Dict[object, str] = {}
     tool_call_count = 0
