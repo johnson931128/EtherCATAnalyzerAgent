@@ -64,6 +64,10 @@ class SDORoutingTests(unittest.TestCase):
         normalized = explain.call_args.args[1]
         self.assertIn("semantic_frames", normalized)
         self.assertIn("transactions", normalized)
+        self.assertIn("query_spec", normalized)
+        self.assertIn("evidence_plan", normalized)
+        self.assertIn("evidence_assessment", normalized)
+        self.assertIn("evidence_trace", normalized)
         self.assertEqual(result, {"result": "explained"})
 
     def test_wkc_abort_object_query_uses_integer_arguments(self):
@@ -267,7 +271,7 @@ class SDORoutingTests(unittest.TestCase):
         self.assertEqual(result["result"], "normal")
 
 
-    def test_object_query_prompt_separates_path_and_coe_roles(self):
+    def test_object_query_prompt_preserves_semantic_safety(self):
         prompt = engineering_tool_agent._sdo_object_query_prompt(
             "查 0x1A00:02 的 request/response frame",
             {"semantic_frames": [], "transactions": []},
@@ -277,16 +281,28 @@ class SDORoutingTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "`request_returning` is the same SDO Request copied after the Slave",
+            "`request_returning` is the same SDO Request copied after traversing the Slave",
             prompt,
         )
         self.assertIn(
-            "WKC is EtherCAT Datagram execution evidence, not proof of SDO success",
+            "WKC is EtherCAT Datagram processing/execution evidence",
             prompt,
         )
+        self.assertIn(
+            "Python's grouped transactions and evidence assessment are authoritative",
+            prompt,
+        )
+        self.assertIn(
+            "Do not regroup, change pairing, invent frames or values",
+            prompt,
+        )
+        self.assertIn("If Python evidence is ambiguous or incomplete", prompt)
+        self.assertNotIn("## 查詢結果", prompt)
+        self.assertNotIn("## Transaction N", prompt)
+        self.assertNotIn("## 總結", prompt)
 
 
-    def test_sdo_query_prompt_requires_complete_structured_answer(self):
+    def test_sdo_query_prompt_allows_communication_choice_and_keeps_evidence(self):
         query_result = {
             "query_spec": {"index": 0x1A00, "subindex": 2},
             "evidence_plan": {"planned_tshark_scans": 1},
@@ -319,14 +335,12 @@ class SDORoutingTests(unittest.TestCase):
 
         for required_text in (
             "Traditional Chinese",
-            "## 查詢結果",
-            "- Evidence Status:",
-            "- TShark Queries:",
-            "## Transaction N",
-            "- Returning Frame:",
-            "## 總結",
-            "Use N/A for any required field",
-            "display None (for example, Abort: None)",
+            "Answer the user's actual engineering question directly",
+            "Prose, bullets, or a Markdown table are all appropriate",
+            "Avoid redundant repetition",
+            "do not silently omit a relevant transaction",
+            "Transport protocol requirement (not an answer-format template)",
+            "inside the answer string",
             '"status":"COMPLETE"',
             '"tshark_scans":1',
         ):
@@ -343,8 +357,9 @@ class SDORoutingTests(unittest.TestCase):
             215610,
         ):
             self.assertIn(str(frame_number), prompt)
-        self.assertIn("WKC=1 does not prove SDO success", prompt)
-        self.assertIn("WKC never confirms SDO completion", prompt)
+        self.assertIn("evidence_assessment", prompt)
+        self.assertIn("evidence_trace", prompt)
+        self.assertIn("WKC=1 does not mean SDO success", prompt)
         self.assertNotIn("<concise explanation>", prompt)
 
 
