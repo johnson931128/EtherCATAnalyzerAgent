@@ -19,6 +19,7 @@ from retrieval.sdo_verification import (
 from retrieval.sdo_query import (
     extract_sdo_object_reference,
     is_sdo_object_capture_query,
+    normalize_sdo_object_query_result,
 )
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
@@ -475,11 +476,15 @@ def _sdo_object_query_prompt(
         "You explain deterministic EtherCAT SDO object query evidence.\n"
         "Python has already parsed the hexadecimal object reference and executed "
         "exactly one bounded query_sdo_object call. The JSON below is authoritative. "
-        "Do not call tools, select captures, build filters, infer missing request/"
-        "response pairing, or invent values. Report the returned frame number(s), "
-        "EtherCAT path role, ADP/station evidence, index/subindex, request/response "
-        "fields, data, WKC, and abort code when those fields are present. If the "
-        "deterministic result does not distinguish a value, say it is not available.\n"
+        "Use the provided semantic_role values and transactions exactly as grouped by Python. "
+        "EtherCAT outgoing/returning is not the same as CoE SDO request/response. "
+        "Never describe a returning copy of an SDO Request as the SDO Response. "
+        "Do not call tools, select captures, build filters, regroup frames, infer "
+        "missing pairing, or invent values. Report request outgoing/returning frames, "
+        "the CoE SDO Response, ADP, index/subindex, data, WKC, path role, and abort "
+        "evidence when present. WKC is EtherCAT datagram execution/path evidence, not "
+        "SDO success. If deterministic evidence is insufficient, say ambiguous or "
+        "unpaired; do not guess.\n"
         "Return exactly one JSON object: "
         '{"action":"final","answer":"<concise explanation>"}.\n\n'
         "User request:\n"
@@ -525,7 +530,8 @@ def _run_sdo_object_query(
         return _sdo_routing_error(str(exc))
     if not isinstance(query_result, dict):
         return _sdo_routing_error("SDO object query returned an invalid result.")
-    return _run_sdo_object_query_agent(task, query_result, tool_display)
+    normalized_result = normalize_sdo_object_query_result(query_result)
+    return _run_sdo_object_query_agent(task, normalized_result, tool_display)
 
 
 def run_engineering_tool_agent(state: AgentState):

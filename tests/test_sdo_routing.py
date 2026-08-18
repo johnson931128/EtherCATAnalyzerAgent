@@ -61,6 +61,9 @@ class SDORoutingTests(unittest.TestCase):
         )
         find_first.assert_not_called()
         explain.assert_called_once()
+        normalized = explain.call_args.args[1]
+        self.assertIn("semantic_frames", normalized)
+        self.assertIn("transactions", normalized)
         self.assertEqual(result, {"result": "explained"})
 
     def test_wkc_abort_object_query_uses_integer_arguments(self):
@@ -262,6 +265,25 @@ class SDORoutingTests(unittest.TestCase):
 
         classify.assert_not_called()
         self.assertEqual(result["result"], "normal")
+
+
+    def test_object_query_prompt_separates_path_and_coe_roles(self):
+        prompt = engineering_tool_agent._sdo_object_query_prompt(
+            "查 0x1A00:02 的 request/response frame",
+            {"semantic_frames": [], "transactions": []},
+        )
+        self.assertIn(
+            "outgoing/returning is not the same as CoE SDO request/response",
+            prompt,
+        )
+        self.assertIn(
+            "Never describe a returning copy of an SDO Request as the SDO Response",
+            prompt,
+        )
+        self.assertIn(
+            "WKC is EtherCAT datagram execution/path evidence",
+            prompt,
+        )
 
 
 if __name__ == "__main__":
