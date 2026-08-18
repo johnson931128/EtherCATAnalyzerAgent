@@ -518,11 +518,9 @@ def _sdo_object_query_prompt(
         "If evidence is insufficient, say ambiguous or unpaired; do not guess.\n\n"
         + SDO_QUERY_ANSWER_REQUIREMENTS
         + "\n"
-        "Transport protocol requirement (not an answer-format template): return exactly "
-        "one valid JSON object with action=final and the chosen prose, bullets, or table "
-        "inside the answer string. Do not emit Markdown or plain answer text outside the "
-        "JSON object, and do not use markdown fences. Example shape: "
-        '{"action":"final","answer":"<your chosen engineering answer>"}.\n\n'
+        "Output only the final natural-language or Markdown engineering answer. Do not "
+        "wrap it in an action/final JSON object, add an answer field, or use a JSON "
+        "wrapper; this stage does not request another tool.\n\n"
         "User request:\n"
         + task.strip()
         + "\n\nDeterministic query result:\n"
@@ -535,12 +533,12 @@ def _run_sdo_object_query_agent(
 ) -> Dict[str, object]:
     try:
         response = llm.invoke(_sdo_object_query_prompt(task, query_result))
-        action = _parse_action(response.content)
-        if action["action"] != "final":
-            raise ValueError("SDO object explanation must be a final answer")
-        answer = action["answer"]
+        answer = response.content.strip()
     except Exception:
-        answer = json.dumps(query_result, ensure_ascii=False, separators=(",", ":"))
+        answer = (
+            "SDO evidence query completed, but the natural-language explanation "
+            "could not be generated."
+        )
     return {
         "result": answer,
         "capture_mode": "tool_agent",

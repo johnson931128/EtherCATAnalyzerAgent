@@ -125,6 +125,38 @@ class SDORoutingTests(unittest.TestCase):
         query.assert_not_called()
         self.assertIn("No active capture selected", result["result"])
 
+    def test_sdo_object_query_agent_accepts_direct_markdown_answer(self):
+        markdown = "## 查詢結果\n\n找到 3 筆 transaction。"
+        client = SimpleNamespace(
+            invoke=Mock(return_value=SimpleNamespace(content=markdown))
+        )
+        with patch.object(engineering_tool_agent.llm, "_client", client):
+            result = engineering_tool_agent._run_sdo_object_query_agent(
+                "查詢 0x1A00:02",
+                {"transactions": []},
+                "query_sdo_object(...)",
+            )
+
+        self.assertEqual(result["result"], markdown)
+        client.invoke.assert_called_once()
+        self.assertNotIn('{"action":"final"', client.invoke.call_args.args[0])
+
+    def test_sdo_object_query_agent_does_not_dump_evidence_on_llm_failure(self):
+        client = SimpleNamespace(invoke=Mock(side_effect=RuntimeError("LLM down")))
+        with patch.object(engineering_tool_agent.llm, "_client", client):
+            result = engineering_tool_agent._run_sdo_object_query_agent(
+                "查詢 0x1A00:02",
+                {"transactions": [{"transaction_number": 1}]},
+                "query_sdo_object(...)",
+            )
+
+        self.assertEqual(
+            result["result"],
+            "SDO evidence query completed, but the natural-language explanation "
+            "could not be generated.",
+        )
+        self.assertNotIn("transactions", result["result"])
+
     def test_explicit_verify_bypasses_intent_classifier_and_strips_control_line(self):
         context = {"parsed_claims": [{"request_frame": 41460}]}
         for prefix in ("verify", "verify sdo"):
@@ -339,8 +371,8 @@ class SDORoutingTests(unittest.TestCase):
             "Prose, bullets, or a Markdown table are all appropriate",
             "Avoid redundant repetition",
             "do not silently omit a relevant transaction",
-            "Transport protocol requirement (not an answer-format template)",
-            "inside the answer string",
+            "Output only the final natural-language or Markdown engineering answer",
+            "Do not wrap it in an action/final JSON object",
             '"status":"COMPLETE"',
             '"tshark_scans":1',
         ):
@@ -360,6 +392,7 @@ class SDORoutingTests(unittest.TestCase):
         self.assertIn("evidence_assessment", prompt)
         self.assertIn("evidence_trace", prompt)
         self.assertIn("WKC=1 does not mean SDO success", prompt)
+        self.assertNotIn('{"action":"final"', prompt)
         self.assertNotIn("<concise explanation>", prompt)
 
 
