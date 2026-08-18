@@ -21,6 +21,7 @@ from retrieval.sdo_query import (
     is_sdo_object_capture_query,
     normalize_sdo_object_query_result,
 )
+from retrieval.sdo_planning import assess_sdo_evidence, build_sdo_evidence_plan
 from retrieval.source_retrieval import search_source
 from retrieval.tshark_capture import (
     export_frame_json,
@@ -474,9 +475,10 @@ def _sdo_object_query_prompt(
 ) -> str:
     return (
         "You explain deterministic EtherCAT SDO object query evidence.\n"
-        "Python has already parsed the hexadecimal object reference and executed "
-        "exactly one bounded query_sdo_object call. The JSON below is authoritative. "
-        "Use the provided semantic_role values and transactions exactly as grouped by Python. "
+        "Python has already parsed the hexadecimal object reference, built the "
+        "QuerySpec/EvidencePlan, and executed exactly one bounded query_sdo_object "
+        "call. The JSON below is authoritative. Use the EvidenceAssessment and "
+        "normalized transactions exactly as grouped by Python. "
         "EtherCAT outgoing/returning is not the same as CoE SDO request/response. "
         "Never describe a returning copy of an SDO Request as the SDO Response. "
         "Do not call tools, select captures, build filters, regroup frames, infer "
@@ -516,13 +518,10 @@ def _run_sdo_object_query_agent(
 def _run_sdo_object_query(
     task: str, active_capture: str, reference: Dict[str, int]
 ) -> Dict[str, object]:
-    arguments = {
-        "capture": active_capture,
-        "index": reference["index"],
-        "subindex": reference["subindex"],
-        "frame_start": None,
-        "frame_end": None,
-    }
+    plan = build_sdo_evidence_plan(task, active_capture)
+    if plan is None:
+        return _sdo_routing_error("The SDO evidence plan could not parse the object reference.")
+    arguments = plan["arguments"]
     tool_display = _tool_display("query_sdo_object", arguments)
     try:
         query_result = _query_sdo_object_tool(arguments)
@@ -531,6 +530,18 @@ def _run_sdo_object_query(
     if not isinstance(query_result, dict):
         return _sdo_routing_error("SDO object query returned an invalid result.")
     normalized_result = normalize_sdo_object_query_result(query_result)
+    assessment = assess_sdo_evidence(normalized_result, plan["query_spec"])
+    normalized_result["query_spec"] = plan["query_spec"]
+    normalized_result["evidence_plan"] = plan
+    normalized_result["evidence_assessment"] = assessment
+    normalized_result["evidence_trace"] = {
+        "active_capture": active_capture,
+        "primary_query": plan["primary_query"],
+        "index": plan["query_spec"]["index"],
+        "subindex": plan["query_spec"]["subindex"],
+        "tshark_scans": 1,
+        "evidence_status": assessment["status"],
+    }
     return _run_sdo_object_query_agent(task, normalized_result, tool_display)
 
 

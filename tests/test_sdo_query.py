@@ -1,6 +1,9 @@
 import unittest
 
 from retrieval.sdo_query import (
+    assess_sdo_evidence,
+    build_sdo_evidence_plan,
+    build_sdo_query_spec,
     extract_sdo_object_reference,
     has_sdo_capture_query_intent,
     is_sdo_object_capture_query,
@@ -25,11 +28,14 @@ class SDOQueryPlanningTests(unittest.TestCase):
             "datagram_sequence": 1,
             "cmd": command,
             "cmd_name": command,
+            "idx": "0x0000",
             "adp": "0x0001",
             "ado": "0x1000",
+            "data_length": "0x0080",
             "wkc": wkc,
-            "mailbox": {"counter": counter},
+            "mailbox": {"type": "3", "counter": counter},
             "coe": {
+                "type": "2",
                 "sdo_request": sdo_request,
                 "sdo_response": sdo_response,
                 "index": "0x1a00",
@@ -74,7 +80,7 @@ class SDOQueryPlanningTests(unittest.TestCase):
                         "returning",
                         "FPRD",
                         "1",
-                        counter,
+                        str(int(counter) + 8),
                         sdo_response="1",
                     ),
                 ]
@@ -108,11 +114,15 @@ class SDOQueryPlanningTests(unittest.TestCase):
         self.assertEqual(rows[41639]["semantic_role"], "request_outgoing")
         self.assertEqual(rows[41640]["semantic_role"], "request_returning")
         self.assertEqual(rows[41786]["semantic_role"], "response")
+        self.assertEqual(rows[41639]["mailbox_type"], "3")
+        self.assertEqual(rows[41639]["coe_type"], "2")
+        self.assertEqual(rows[41639]["data_length"], "0x0080")
 
         first = result["transactions"][0]
         self.assertEqual(first["request_outgoing"]["frame_number"], 41639)
         self.assertEqual(first["request_returning"]["frame_number"], 41640)
         self.assertEqual(first["response"]["frame_number"], 41786)
+        self.assertEqual(first["request_exchange"]["pairing_status"], "grouped")
         self.assertEqual(first["written_data"], "0x60430010")
         self.assertIsNone(first["abort"])
 
@@ -136,6 +146,51 @@ class SDOQueryPlanningTests(unittest.TestCase):
     def test_capture_intent_requires_one_valid_object_reference(self):
         self.assertTrue(is_sdo_object_capture_query("幫我看 0x1A00:02 的 WKC 跟 abort"))
         self.assertFalse(is_sdo_object_capture_query("查 0x1A00:02 與 0x1C12:01 的 frame"))
+
+    def test_builds_integer_query_spec_and_single_scan_plan(self):
+        task = "query 0x1A00:02 request response frame write data WKC abort"
+        spec = build_sdo_query_spec(task)
+        plan = build_sdo_evidence_plan(task, "active.pcapng")
+        self.assertEqual(spec["index"], 0x1A00)
+        self.assertEqual(spec["subindex"], 2)
+        self.assertEqual(plan["primary_query"], "query_sdo_object")
+        self.assertEqual(plan["arguments"]["index"], 0x1A00)
+        self.assertEqual(plan["arguments"]["subindex"], 2)
+        self.assertEqual(plan["planned_tshark_scans"], 1)
+
+    def test_assessment_marks_complete_without_refinement(self):
+        task = "query 0x1A00:02 request response frame write data WKC abort"
+        plan = build_sdo_evidence_plan(task, "active.pcapng")
+        normalized = normalize_sdo_object_query_result(self._three_transaction_result())
+        assessment = assess_sdo_evidence(normalized, plan["query_spec"])
+        self.assertEqual(assessment["status"], "COMPLETE")
+        self.assertEqual(assessment["missing_evidence"], [])
+        self.assertIsNone(assessment["refinement"])
+
+    def test_assessment_does_not_call_request_only_evidence_complete(self):
+        task = "query 0x1A00:02 request response frame WKC abort"
+        plan = build_sdo_evidence_plan(task, "active.pcapng")
+        request_only = normalize_sdo_object_query_result(
+            {
+                "index": 0x1A00,
+                "subindex": 2,
+                "frames": [
+                    self._frame(
+                        self._datagram(
+                            41639,
+                            "outgoing",
+                            "FPWR",
+                            "0",
+                            "1",
+                            sdo_request="1",
+                        )
+                    )
+                ],
+            }
+        )
+        assessment = assess_sdo_evidence(request_only, plan["query_spec"])
+        self.assertEqual(assessment["status"], "PARTIAL")
+        self.assertIn("request_response", assessment["missing_evidence"])
 
     def test_abort_is_terminal_abort_evidence_not_success(self):
         records = [
