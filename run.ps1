@@ -3,6 +3,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $settings = Join-Path $PSScriptRoot "local.settings.ps1"
 if (Test-Path $settings) {
     . $settings
+    Write-Host "Local settings: Loaded"
 }
 else {
     Write-Host "Local settings: Not found"

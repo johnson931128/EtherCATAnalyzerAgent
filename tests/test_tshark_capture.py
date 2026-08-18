@@ -1,20 +1,23 @@
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent import engineering_tool_agent
+from core import tshark_runtime
 from retrieval import tshark_capture
+
+
+TEST_CAPTURE_ROOT = (
+    Path(__file__).resolve().parents[1] / "temp" / "tshark_capture" / "captures"
+)
 
 
 class TSharkCaptureToolTests(unittest.TestCase):
     def setUp(self):
-        self.temp_directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_directory.cleanup)
-        self.capture_root = Path(self.temp_directory.name) / "captures"
-        self.capture_root.mkdir()
+        self.capture_root = TEST_CAPTURE_ROOT
+        self.capture_root.mkdir(parents=True, exist_ok=True)
         self.capture_path = self.capture_root / "sample.pcapng"
         self.capture_path.write_bytes(b"fixture capture")
         self.root_patch = patch.object(
@@ -22,6 +25,16 @@ class TSharkCaptureToolTests(unittest.TestCase):
         )
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
+        self.which_patch = patch.object(
+            tshark_runtime.shutil, "which", return_value="tshark"
+        )
+        self.which_patch.start()
+        self.addCleanup(self.which_patch.stop)
+        self.runtime_checks_patch = patch.dict(
+            tshark_runtime._RUNTIME_CHECKS, {}, clear=True
+        )
+        self.runtime_checks_patch.start()
+        self.addCleanup(self.runtime_checks_patch.stop)
 
     def _completed(self, stdout="", stderr="", returncode=0):
         return SimpleNamespace(
@@ -91,7 +104,7 @@ class TSharkCaptureToolTests(unittest.TestCase):
     def test_absolute_capture_path_is_rejected(self):
         with self.assertRaises(ValueError):
             tshark_capture.resolve_capture_path(
-                str(Path(self.temp_directory.name) / "sample.pcapng")
+                str(self.capture_root.parent / "sample.pcapng")
             )
 
     def test_unsupported_capture_extension_is_rejected(self):

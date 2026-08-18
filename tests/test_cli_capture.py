@@ -1,4 +1,5 @@
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -6,6 +7,24 @@ import main
 
 
 class CliCaptureTests(unittest.TestCase):
+    def test_capture_root_existing_is_ok(self):
+        root = Path(__file__).resolve().parents[1] / "captures"
+        with patch.dict(os.environ, {"CAPTURE_INPUT_ROOT": str(root)}):
+            self.assertEqual(main.check_capture_root(root)["status"], "OK")
+
+    def test_capture_root_missing_is_error(self):
+        root = Path(__file__).resolve().parents[1] / "missing-capture-root"
+        self.assertEqual(main.check_capture_root(root)["status"], "ERROR")
+
+    def test_repository_capture_root_fallback_is_warning(self):
+        root = Path(__file__).resolve().parents[1] / "captures"
+        with patch.dict(os.environ, {"CAPTURE_INPUT_ROOT": ""}):
+            status = main.check_capture_root(root)
+        self.assertEqual(status["status"], "WARNING")
+        self.assertEqual(
+            status["message"], "Using repository-local fallback capture directory."
+        )
+
     def test_list_available_captures_is_direct_and_deterministic(self):
         class Entry:
             def __init__(self, name, is_file=True):

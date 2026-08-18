@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.config import CAPTURE_INPUT_ROOT, TSHARK_EXECUTABLE
+from core.tshark_runtime import resolve_tshark_executable
 from retrieval.raw_capture import COE_SDO_FIELDS
 
 
@@ -574,9 +575,7 @@ def query_sdo_object(
 
 
 def _tshark_command_prefix(capture_path: Path) -> List[str]:
-    executable = str(TSHARK_EXECUTABLE).strip()
-    if not executable:
-        raise FileNotFoundError("TShark executable not found: not configured")
+    executable = resolve_tshark_executable(TSHARK_EXECUTABLE)
     return [executable, "-r", str(capture_path)]
 
 

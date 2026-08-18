@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -170,16 +171,49 @@ def print_spec_ingest_result(spec_name):
     print("Conversion completed.")
 
 
+def check_capture_root(capture_root=None):
+    """Return deterministic startup status for the configured capture root."""
+    from core.config import (
+        CAPTURE_INPUT_ROOT,
+        REPOSITORY_ROOT,
+    )
+
+    root = Path(CAPTURE_INPUT_ROOT if capture_root is None else capture_root)
+    if not root.is_dir():
+        return {
+            "status": "ERROR",
+            "message": f"Capture root directory not found: {root}",
+        }
+
+    configured_root = os.environ.get("CAPTURE_INPUT_ROOT", "").strip()
+    fallback_root = (REPOSITORY_ROOT / "captures").resolve()
+    if not configured_root and root.resolve() == fallback_root:
+        return {
+            "status": "WARNING",
+            "message": "Using repository-local fallback capture directory.",
+        }
+    return {"status": "OK", "message": ""}
+
+
 def print_startup_diagnostics():
-    """Print the lightweight capture-related runtime configuration."""
+    """Print lightweight capture and TShark runtime configuration status."""
     from core.config import (
         CAPTURE_INPUT_ROOT,
         TSHARK_EXECUTABLE,
     )
+    from core.tshark_runtime import check_tshark_runtime
 
     print(f"Capture root: {CAPTURE_INPUT_ROOT}")
+    capture_status = check_capture_root(CAPTURE_INPUT_ROOT)
+    print(f"Capture root status: {capture_status['status']}")
+    if capture_status["message"]:
+        print(capture_status["message"])
     print("Active capture: Not selected")
     print(f"TShark: {TSHARK_EXECUTABLE}")
+    tshark_status = check_tshark_runtime(TSHARK_EXECUTABLE)
+    print(f"TShark status: {tshark_status['status']}")
+    if tshark_status["message"]:
+        print(tshark_status["message"])
 
 
 def list_available_captures(capture_root=None):

@@ -8,13 +8,6 @@ from core.config import RAW_TSHARK_PATH
 from core.llm import llm
 from core.state import AgentState
 from retrieval.markdown_spec import search_spec_markdown
-from retrieval.pdf_spec import (
-    MAX_RAW_PAGE_COUNT,
-    MAX_RAW_SEARCH_LIMIT,
-    RAW_SPEC_NAME,
-    get_spec_raw_pages,
-    search_spec_raw,
-)
 from retrieval.raw_capture import find_first_coe_sdo_packet
 from retrieval.sdo_verification import (
     build_sdo_verification_context,
@@ -152,6 +145,11 @@ def _find_first_coe_sdo_tool(arguments: Any) -> Dict[str, object]:
 
 
 def _validated_raw_search_arguments(arguments: Any):
+    from retrieval.pdf_spec import (
+        MAX_RAW_SEARCH_LIMIT,
+        RAW_SPEC_NAME,
+    )
+
     if not isinstance(arguments, dict) or set(arguments) != {"spec", "query", "limit"}:
         raise ValueError("search_spec_raw expects exactly: spec, query, limit")
     spec = arguments["spec"]
@@ -167,6 +165,11 @@ def _validated_raw_search_arguments(arguments: Any):
 
 
 def _validated_raw_pages_arguments(arguments: Any):
+    from retrieval.pdf_spec import (
+        MAX_RAW_PAGE_COUNT,
+        RAW_SPEC_NAME,
+    )
+
     if not isinstance(arguments, dict) or set(arguments) != {"spec", "pages"}:
         raise ValueError("get_spec_raw_pages expects exactly: spec, pages")
     spec = arguments["spec"]
@@ -189,6 +192,8 @@ def _validated_raw_pages_arguments(arguments: Any):
 
 
 def _search_spec_raw_tool(arguments: Any) -> Dict[str, object]:
+    from retrieval.pdf_spec import search_spec_raw
+
     spec, query, limit = _validated_raw_search_arguments(arguments)
     return {
         "query": query,
@@ -197,6 +202,8 @@ def _search_spec_raw_tool(arguments: Any) -> Dict[str, object]:
 
 
 def _get_spec_raw_pages_tool(arguments: Any) -> Dict[str, object]:
+    from retrieval.pdf_spec import get_spec_raw_pages
+
     spec, pages = _validated_raw_pages_arguments(arguments)
     return {
         "pages": get_spec_raw_pages(spec=spec, pages=pages),

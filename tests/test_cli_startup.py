@@ -31,6 +31,19 @@ class CliStartupTests(unittest.TestCase):
         self.assertIn("[]", result.stdout)
         self.assertNotIn("fitz API is deprecated", result.stderr)
 
+    def test_startup_preflight_keeps_heavy_modules_unloaded(self):
+        env = os.environ.copy()
+        env["TSHARK_EXECUTABLE"] = r"C:\missing\tshark.exe"
+        result = self._run_python(
+            "import main, sys; main.print_startup_diagnostics(); "
+            "print([name for name in ('docling', 'fitz', 'langchain_openai') "
+            "if name in sys.modules])",
+            env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[]", result.stdout)
+
     def test_startup_diagnostics_show_runtime_capture_state(self):
         env = os.environ.copy()
         env.update(
@@ -52,6 +65,7 @@ class CliStartupTests(unittest.TestCase):
     def test_startup_diagnostics_do_not_display_default_capture(self):
         env = os.environ.copy()
         env["DEFAULT_CAPTURE_NAME"] = "PowerOn.pcapng"
+        env["TSHARK_EXECUTABLE"] = r"C:\missing\tshark.exe"
         result = self._run_python("import main; main.print_startup_diagnostics()", env)
 
         self.assertEqual(result.returncode, 0, result.stderr)
