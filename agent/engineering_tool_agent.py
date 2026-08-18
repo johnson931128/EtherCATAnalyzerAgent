@@ -81,6 +81,48 @@ do not generalize a command-specific table rule into a simpler universal rule. S
 explicitly when the available evidence is insufficient. Do not reveal hidden reasoning."""
 
 
+SDO_QUERY_RESPONSE_CONTRACT = (
+    "SDO object capture answers must follow this response contract. "
+    "Default answer language is Traditional Chinese (繁體中文), unless the user "
+    "explicitly requests another language. Return Markdown inside the JSON answer.\n\n"
+    "## 查詢結果\n"
+    "- Object:\n- Transactions Found:\n- Evidence Status:\n- TShark Queries:\n\n"
+    "Render every transaction in the authoritative `transactions` array in its "
+    "existing order; do not regroup or select a subset.\n\n"
+    "## Transaction N\n\n"
+    "### SDO Request\n"
+    "- Station:\n- ADP:\n- Outgoing Frame:\n- Returning Frame:\n"
+    "- EtherCAT Command:\n- Data:\n- WKC outgoing:\n- WKC returning:\n\n"
+    "### SDO Completion\n"
+    "- Response Frame:\n- EtherCAT Command:\n- WKC:\n- Abort:\n\n"
+    "Use N/A for any required field that is absent; never omit a required field. "
+    "When Python explicitly supplies null for an optional completion field such as "
+    "no abort, display None (for example, Abort: None).\n\n"
+    "## 總結\n\n"
+    "Explain the supported operation, including SDO Download/write or SDO Upload/read "
+    "only when deterministic evidence supports it; otherwise say SDO transaction. "
+    "Explain the data, transaction count, matching CoE SDO Response or SDO Abort, and "
+    "the meaning of WKC. Keep the explanation engineering-focused, not a one-line "
+    "summary.\n\n"
+    "Semantic constraints: EtherCAT outgoing/returning path roles are not CoE SDO "
+    "request/response roles. `request_returning` is the same SDO Request copied after "
+    "the Slave; it is never an SDO Response or a second SDO Request. FPRD/FPWR are "
+    "EtherCAT commands; FPRD may carry a matching CoE SDO Response and must not be "
+    "called an SDO read/upload operation unless the structured evidence determines "
+    "that operation type. WKC is EtherCAT Datagram execution evidence, not proof of "
+    "SDO success; WKC=1 does not prove SDO success, and WKC never confirms SDO "
+    "completion or a prior SDO write. Completion follows only Python's matching CoE "
+    "SDO Response or SDO Abort evidence.\n\n"
+    "Python structured evidence is authoritative. Do not regroup transactions, change "
+    "pairing, invent frames or fields, infer missing values, recompute PASS/FAIL, "
+    "reinterpret evidence status, choose another capture, request more TShark scans, "
+    "or create filters. Use only the supplied query_spec, evidence_plan, "
+    "evidence_assessment, evidence_trace, and normalized transactions/frame records. "
+    "You may explain those records and their EtherCAT/CoE semantics, but do not make "
+    "a deterministic decision that Python did not make.\n\n"
+)
+
+
 def _validated_query(arguments: Any) -> str:
     if not isinstance(arguments, dict) or set(arguments) != {"query"}:
         raise ValueError("Expected exactly one string argument: query")
@@ -479,16 +521,11 @@ def _sdo_object_query_prompt(
         "QuerySpec/EvidencePlan, and executed exactly one bounded query_sdo_object "
         "call. The JSON below is authoritative. Use the EvidenceAssessment and "
         "normalized transactions exactly as grouped by Python. "
-        "EtherCAT outgoing/returning is not the same as CoE SDO request/response. "
-        "Never describe a returning copy of an SDO Request as the SDO Response. "
-        "Do not call tools, select captures, build filters, regroup frames, infer "
-        "missing pairing, or invent values. Report request outgoing/returning frames, "
-        "the CoE SDO Response, ADP, index/subindex, data, WKC, path role, and abort "
-        "evidence when present. WKC is EtherCAT datagram execution/path evidence, not "
-        "SDO success. If deterministic evidence is insufficient, say ambiguous or "
-        "unpaired; do not guess.\n"
+        "If evidence is insufficient, say ambiguous or unpaired; do not guess.\n\n"
+        + SDO_QUERY_RESPONSE_CONTRACT
+        + "\n"
         "Return exactly one JSON object: "
-        '{"action":"final","answer":"<concise explanation>"}.\n\n'
+        '{"action":"final","answer":"<structured engineering answer>"}.\n\n'
         "User request:\n"
         + task.strip()
         + "\n\nDeterministic query result:\n"

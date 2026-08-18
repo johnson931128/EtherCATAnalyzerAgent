@@ -273,17 +273,79 @@ class SDORoutingTests(unittest.TestCase):
             {"semantic_frames": [], "transactions": []},
         )
         self.assertIn(
-            "outgoing/returning is not the same as CoE SDO request/response",
+            "EtherCAT outgoing/returning path roles are not CoE SDO request/response roles",
             prompt,
         )
         self.assertIn(
-            "Never describe a returning copy of an SDO Request as the SDO Response",
+            "`request_returning` is the same SDO Request copied after the Slave",
             prompt,
         )
         self.assertIn(
-            "WKC is EtherCAT datagram execution/path evidence",
+            "WKC is EtherCAT Datagram execution evidence, not proof of SDO success",
             prompt,
         )
+
+
+    def test_sdo_query_prompt_requires_complete_structured_answer(self):
+        query_result = {
+            "query_spec": {"index": 0x1A00, "subindex": 2},
+            "evidence_plan": {"planned_tshark_scans": 1},
+            "evidence_assessment": {"status": "COMPLETE"},
+            "evidence_trace": {"tshark_scans": 1, "evidence_status": "COMPLETE"},
+            "transactions": [
+                {
+                    "transaction_number": 1,
+                    "request_outgoing": {"frame_number": 41639},
+                    "request_returning": {"frame_number": 41640},
+                    "response": {"frame_number": 41786},
+                },
+                {
+                    "transaction_number": 2,
+                    "request_outgoing": {"frame_number": 111709},
+                    "request_returning": {"frame_number": 111710},
+                    "response": {"frame_number": 111856},
+                },
+                {
+                    "transaction_number": 3,
+                    "request_outgoing": {"frame_number": 215437},
+                    "request_returning": {"frame_number": 215438},
+                    "response": {"frame_number": 215610},
+                },
+            ],
+        }
+        prompt = engineering_tool_agent._sdo_object_query_prompt(
+            "幫我查目前封包中 0x1A00:02 的 SDO 操作", query_result
+        )
+
+        for required_text in (
+            "Traditional Chinese",
+            "## 查詢結果",
+            "- Evidence Status:",
+            "- TShark Queries:",
+            "## Transaction N",
+            "- Returning Frame:",
+            "## 總結",
+            "Use N/A for any required field",
+            "display None (for example, Abort: None)",
+            '"status":"COMPLETE"',
+            '"tshark_scans":1',
+        ):
+            self.assertIn(required_text, prompt)
+        for frame_number in (
+            41639,
+            41640,
+            41786,
+            111709,
+            111710,
+            111856,
+            215437,
+            215438,
+            215610,
+        ):
+            self.assertIn(str(frame_number), prompt)
+        self.assertIn("WKC=1 does not prove SDO success", prompt)
+        self.assertIn("WKC never confirms SDO completion", prompt)
+        self.assertNotIn("<concise explanation>", prompt)
 
 
 if __name__ == "__main__":
